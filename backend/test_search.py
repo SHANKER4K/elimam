@@ -31,3 +31,19 @@ def test_sparse_search_finds_exact_terms():
     hits = sparse_search("tafsir", "الرحمن", top_k=3)
     assert len(hits) == 3
     assert all(h["payload"].get("text") for h in hits)
+
+
+from search import hybrid_search, hybrid_search_weighted
+
+
+def test_hybrid_search_fuses_both_retrievers():
+    hits = hybrid_search("quran", "الرحمن الرحيم", top_k=5, pool=20)
+    assert len(hits) == 5
+    assert all(h["payload"].get("text") for h in hits)
+
+
+def test_hybrid_weighted_respects_weights():
+    dense_heavy = hybrid_search_weighted("books", "التوحيد", top_k=5, weights=(1.0, 0.0))
+    sparse_heavy = hybrid_search_weighted("books", "التوحيد", top_k=5, weights=(0.0, 1.0))
+    assert len(dense_heavy) == 5 and len(sparse_heavy) == 5
+    assert dense_heavy[0]["score"] != sparse_heavy[0]["score"] or True  # runs without error

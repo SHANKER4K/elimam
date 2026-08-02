@@ -117,6 +117,82 @@ def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
     ).points]
 
 
+def hybrid_search(collection: str, query_text: str, top_k: int = 10, pool: int = 50) -> list:
+    """Hybrid search: dense + sparse in parallel, fused with RRF.
+
+    Runs dense (cosine) and sparse (BM25) searches in parallel via prefetch,
+    then fuses their candidate lists with Reciprocal Rank Fusion. RRF is
+    rank-based, so the incomparable cosine/BM25 score scales don't matter.
+
+    Args:
+        collection: One of "quran", "hadith", "tafsir", "books".
+        query_text: Free-text query (Arabic).
+        top_k: Number of results to return.
+        pool: Candidates retrieved per retriever before fusion. Larger = slower;
+            50 is enough before reranking.
+
+    Returns:
+        List of dicts: {"id", "version", "score", "payload"} — same type as
+        every other search function.
+    """
+    return [p.model_dump() for p in client.query_points(
+        collection_name=collection,
+        prefetch=[
+            models.Prefetch(query=_dense_query(query_text), using="dense", limit=pool),
+            models.Prefetch(query=_sparse_query(query_text), using="sparse", limit=pool),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=top_k,
+        with_payload=True,
+        with_vectors=False,
+    ).points]
+
+
+def hybrid_search_weighted(
+    collection: str,
+    query_text: str,
+    top_k: int = 10,
+    pool: int = 50,
+    weights: tuple[float, float] = (0.7, 0.3),
+) -> list:
+    """Hybrid search with per-retriever weights (weighted RRF).
+
+    Same as `hybrid_search` but each retriever's rank contribution is scaled
+    by `weights` (dense, sparse). Sent as raw HTTP because the installed
+    qdrant-client's FusionQuery model forbids the `weights` field, while the
+    Qdrant server supports it.
+
+    Args:
+        collection: One of "quran", "hadith", "tafsir", "books".
+        query_text: Free-text query (Arabic).
+        top_k: Number of results to return.
+        pool: Candidates retrieved per retriever before fusion.
+        weights: (dense_weight, sparse_weight). Both must be >= 0; the bigger
+            one dominates the ranking. Tune per collection with real queries.
+
+    Returns:
+        List of dicts: {"id", "version", "score", "payload"} — already the
+        raw JSON shape from the HTTP response, same type as the other three.
+    """
+    body = {
+        "prefetch": [
+            {"query": _dense_query(query_text), "using": "dense", "limit": pool},
+            {"query": _sparse_query(query_text).model_dump(), "using": "sparse", "limit": pool},
+        ],
+        "query": {"fusion": "rrf", "weights": list(weights)},
+        "limit": top_k,
+        "with_payload": True,
+        "with_vectors": False,
+    }
+    response = httpx.post(
+        f"{QDRANT_URL}/collections/{collection}/points/query",
+        json=body,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["result"]["points"]
+
+
 # %%
 
 
