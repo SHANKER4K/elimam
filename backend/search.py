@@ -68,6 +68,55 @@ def _sparse_query(text: str) -> models.SparseVector:
     return models.SparseVector(indices=sv.indices.tolist(), values=sv.values.tolist())
 
 
+def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
+    """Search one collection by dense vector similarity.
+
+    Embeds `query_text` with the ONNX model (preprocessed like training data)
+    and returns the `top_k` nearest points by cosine over the `dense` vectors.
+
+    Args:
+        collection: One of "quran", "hadith", "tafsir", "books".
+        query_text: Free-text query (Arabic).
+        top_k: Number of results to return.
+
+    Returns:
+        List of dicts: {"id", "version", "score", "payload"} — same shape as
+        every other search function.
+    """
+    return [p.model_dump() for p in client.query_points(
+        collection_name=collection,
+        query=_dense_query(query_text),
+        using="dense",
+        limit=top_k,
+        with_payload=True,
+        with_vectors=False,
+    ).points]
+
+
+def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
+    """Search one collection by exact BM25 keyword match.
+
+    Embeds `query_text` with fastembed Qdrant/bm25 and searches the `sparse`
+    vectors. Catches exact term matches that dense search misses.
+
+    Args:
+        collection: One of "quran", "hadith", "tafsir", "books".
+        query_text: Free-text query (Arabic). Use exact terms — no stemming.
+        top_k: Number of results to return.
+
+    Returns:
+        List of dicts: {"id", "version", "score", "payload"}.
+    """
+    return [p.model_dump() for p in client.query_points(
+        collection_name=collection,
+        query=_sparse_query(query_text),
+        using="sparse",
+        limit=top_k,
+        with_payload=True,
+        with_vectors=False,
+    ).points]
+
+
 # %%
 
 
