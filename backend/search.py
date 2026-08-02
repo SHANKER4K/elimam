@@ -58,7 +58,7 @@ def _preprocess(text: str) -> str:
 
 def _dense_query(text: str) -> list[float]:
     """Embed a query with the ONNX model, preprocessed to match training."""
-    return model([_preprocess(text)])[0].tolist()
+    return model.encode([_preprocess(text)])[0].tolist()
 
 
 def _sparse_query(text: str) -> models.SparseVector:
