@@ -119,3 +119,15 @@ def test_build_filter_validation_errors():
     ):
         with pytest.raises(ValueError):
             _build_filter("quran", bad)
+
+
+def test_dense_search_filters_by_string():
+    hits = dense_search("quran", "الرحمن", top_k=5, filters={"surah": "الفاتحة"})
+    assert len(hits) > 0
+    assert all(h["payload"]["surah"] == "الفاتحة" for h in hits)
+
+
+def test_sparse_search_filters_by_grade():
+    hits = sparse_search("hadith", "قال", top_k=5, filters={"grade": "Sahih"})
+    assert len(hits) > 0
+    assert all(h["payload"]["grade"] == "Sahih" for h in hits)

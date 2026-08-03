@@ -175,7 +175,9 @@ def _build_filter(collection: str, filters: dict | None) -> models.Filter | None
     return models.Filter(must=conditions)
 
 
-def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
+def dense_search(
+    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
+) -> list:
     """Search one collection by dense vector similarity.
 
     Embeds `query_text` with the ONNX model (preprocessed like training data)
@@ -185,6 +187,9 @@ def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
         collection: One of "quran", "hadith", "tafsir", "books".
         query_text: Free-text query (Arabic).
         top_k: Number of results to return.
+        filters: Optional {key: value} metadata filters — see _build_filter.
+            Keys must be in FILTER_SCHEMA[collection]; values are scalars
+            (equal), lists (equal-any), or {eq|lt|gt|lte|gte} dicts on int keys.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — same shape as
@@ -199,11 +204,14 @@ def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
             limit=top_k,
             with_payload=True,
             with_vectors=False,
+            query_filter=_build_filter(collection, filters),
         ).points
     ]
 
 
-def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
+def sparse_search(
+    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
+) -> list:
     """Search one collection by exact BM25 keyword match.
 
     Embeds `query_text` with fastembed Qdrant/bm25 and searches the `sparse`
@@ -213,6 +221,8 @@ def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
         collection: One of "quran", "hadith", "tafsir", "books".
         query_text: Free-text query (Arabic). Use exact terms — no stemming.
         top_k: Number of results to return.
+        filters: Optional {key: value} metadata filters — same semantics as
+            dense_search (see _build_filter).
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"}.
@@ -226,6 +236,7 @@ def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
             limit=top_k,
             with_payload=True,
             with_vectors=False,
+            query_filter=_build_filter(collection, filters),
         ).points
     ]
 
