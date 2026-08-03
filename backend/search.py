@@ -20,32 +20,40 @@ client = QdrantClient(url=QDRANT_URL)
 
 
 def setup_indexes():
-    """Create payload indexes for every field used in filters.
+    """Create payload indexes for every field used in getters and filters.
 
-    Must run once per server start (idempotent — safe to call repeatedly).
-    Makes get_quran/get_hadith/get_tafsir/get_book use indexed lookups instead
-    of a full payload scan (books collection has ~148k points).
+    Idempotent — safe to call repeatedly. Makes getter lookups and filtered
+    searches use indexed access instead of full payload scans (books has
+    ~148k points).
     """
-    index_fields = {
-        "quran": [("ids", models.PayloadSchemaType.KEYWORD)],
-        "hadith": [
+    kind_schema = {
+        "int": models.PayloadSchemaType.INTEGER,
+        "str": models.PayloadSchemaType.KEYWORD,
+    }
+    # Getter-only fields (ids, book, tafsir_book, book_id) are not in
+    # FILTER_SCHEMA; filter keys are derived from it (single source of truth).
+    fields: dict[str, set[tuple[str, models.PayloadSchemaType]]] = {
+        "quran": {("ids", models.PayloadSchemaType.KEYWORD)},
+        "hadith": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("book", models.PayloadSchemaType.KEYWORD),
-        ],
-        "tafsir": [
+        },
+        "tafsir": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("tafsir_book", models.PayloadSchemaType.KEYWORD),
-        ],
-        "books": [
+        },
+        "books": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("book_id", models.PayloadSchemaType.INTEGER),
-        ],
+        },
     }
-    for collection, fields in index_fields.items():
-        for field, schema in fields:
-            client.create_payload_index(
-                collection, field_name=field, field_schema=schema
-            )
+    for collection, keys in FILTER_SCHEMA.items():
+        fields[collection].update(
+            (key, kind_schema[kind]) for key, kind in keys.items()
+        )
+    for collection, index_set in fields.items():
+        for field, schema in index_set:
+            client.create_payload_index(collection, field_name=field, field_schema=schema)
 
 
 def _preprocess(text: str) -> str:

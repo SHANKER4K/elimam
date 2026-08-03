@@ -161,3 +161,21 @@ def test_dense_search_filters_and_and_list_or():
     )
     assert len(or_hits) > 0
     assert all(h["payload"]["surah"] in ("الفاتحة", "البقرة") for h in or_hits)
+
+
+def test_setup_indexes_covers_filter_keys():
+    from qdrant_client import QdrantClient
+
+    setup_indexes()
+    client = QdrantClient(url=QDRANT_URL)
+    expected = {
+        "quran": {"surah_number", "surah"},
+        "hadith": {"grade"},
+        "tafsir": {"surah_number", "surah", "ayah_number"},
+        "books": {
+            "book_name", "category_name", "all_authors", "author_death", "bood_data",
+        },
+    }
+    for collection, fields in expected.items():
+        schema = client.get_collection(collection).payload_schema
+        assert fields <= set(schema)
