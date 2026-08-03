@@ -29,7 +29,7 @@
 - Consumes: `models` (already imported)
 - Produces: `FILTER_SCHEMA: dict[str, dict[str, str]]` and `_build_filter(collection: str, filters: dict | None) -> models.Filter | None` — used by Tasks 2, 3, 4
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/test_search.py`:
 
@@ -78,12 +78,12 @@ def test_build_filter_validation_errors():
             _build_filter("quran", bad)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: FAIL — `ImportError: cannot import name 'FILTER_SCHEMA'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Insert into `backend/search.py` after `_sparse_query` (before `def dense_search`):
 
@@ -195,12 +195,12 @@ def _build_filter(collection: str, filters: dict | None) -> models.Filter | None
     return models.Filter(must=conditions)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: PASS — `14 passed` (9 existing + 5 new; new tests are pure, no Qdrant I/O)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/search.py backend/test_search.py
@@ -218,7 +218,7 @@ git commit -m "feat: filter schema and filter builder"
 - Consumes: `_build_filter(collection, filters)` from Task 1
 - Produces: `dense_search(collection, query_text, top_k=10, filters=None)` and `sparse_search(collection, query_text, top_k=10, filters=None)` — both still return `list[dict]`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/test_search.py`:
 
@@ -237,12 +237,12 @@ def test_sparse_search_filters_by_grade():
 
 (`dense_search`/`sparse_search` are already imported mid-file from the earlier block.)
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: FAIL — `TypeError: dense_search() got an unexpected keyword argument 'filters'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Change `def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:` to:
 
@@ -316,12 +316,12 @@ def sparse_search(
     ]
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: PASS — `16 passed`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/search.py backend/test_search.py
@@ -339,7 +339,7 @@ git commit -m "feat: filters on dense and sparse search"
 - Consumes: `_build_filter(collection, filters)` from Task 1
 - Produces: `hybrid_search(collection, query_text, top_k=10, pool=50, filters=None)` and `hybrid_search_weighted(collection, query_text, top_k=10, pool=50, weights=(0.7, 0.3), filters=None)` — both still return `list[dict]`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/test_search.py`:
 
@@ -376,12 +376,12 @@ def test_dense_search_filters_and_and_list_or():
 
 (`hybrid_search`/`hybrid_search_weighted` are already imported mid-file.)
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: FAIL — `TypeError: hybrid_search() got an unexpected keyword argument 'filters'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Change `def hybrid_search(collection: str, query_text: str, top_k: int = 10, pool: int = 50) -> list:` to:
 
@@ -461,12 +461,12 @@ And before the `response = httpx.post(...)` call, insert:
         body["filter"] = query_filter.model_dump()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: PASS — `19 passed`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/search.py backend/test_search.py
@@ -484,7 +484,7 @@ git commit -m "feat: filters on hybrid and weighted hybrid search"
 - Consumes: `FILTER_SCHEMA` from Task 1 (referenced at call time — defined later in the module, which is fine)
 - Produces: `setup_indexes()` covering getter fields + every filter key; index schema mapping `"int"` → `PayloadSchemaType.INTEGER`, `"str"` → `PayloadSchemaType.KEYWORD`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `backend/test_search.py`:
 
@@ -507,12 +507,12 @@ def test_setup_indexes_covers_filter_keys():
         assert fields <= set(schema)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: FAIL — assertion error on `"surah_number"` (or the first missing index) in `test_setup_indexes_covers_filter_keys`; the other 19 tests still pass.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Replace the whole current `setup_indexes()` (the version with the hardcoded `index_fields` dict) with:
 
@@ -554,12 +554,12 @@ def setup_indexes():
             client.create_payload_index(collection, field_name=field, field_schema=schema)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: PASS — `20 passed`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/search.py backend/test_search.py
@@ -571,18 +571,18 @@ git commit -m "feat: payload indexes for all filter keys"
 
 **Files:** none (run-only, like the previous plan's Task 5)
 
-- [ ] **Step 1: Run the full suite**
+- [x] **Step 1: Run the full suite**
 
 Run: `./.venv/bin/python -m pytest backend/test_search.py -q`
 Expected: PASS — `20 passed`
 
-- [ ] **Step 2: Smoke filtered search on every collection**
+- [x] **Step 2: Smoke filtered search on every collection**
 
 Run from the project root (CWD-relative model path):
 
 ```bash
-PYTHONPATH=backend .venv/bin/python -c "
-from search import *
+./.venv/bin/python -c "
+from backend.search import *
 
 setup_indexes()  # second run — must not error (idempotent)
 smokes = (
@@ -601,13 +601,13 @@ for name, flt in smokes:
 
 Expected: 4 lines, each `> 0 hits`, each first-hit dict has `id`/`score`/`payload`; `setup_indexes()` re-run does not raise.
 
-- [ ] **Step 3: Confirm index count on the server**
+- [x] **Step 3: Confirm index count on the server**
 
 Run:
 
 ```bash
-PYTHONPATH=backend .venv/bin/python -c "
-from search import client
+./.venv/bin/python -c "
+from backend.search import client
 for c in ('quran', 'hadith', 'tafsir', 'books'):
     schema = client.get_collection(c).payload_schema
     print(c, len(schema), sorted(schema))
@@ -616,7 +616,7 @@ for c in ('quran', 'hadith', 'tafsir', 'books'):
 
 Expected: quran 3 (`ids, surah, surah_number`), hadith 3 (`book, grade, ids`), tafsir 5 (`ayah_number, ids, surah, surah_number, tafsir_book`), books 7 (`all_authors, author_death, bood_data, book_id, book_name, category_name, ids`) — 18 total.
 
-- [ ] **Step 4: Commit if anything changed**
+- [x] **Step 4: Commit if anything changed**
 
 ```bash
 git status --short
