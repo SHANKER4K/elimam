@@ -131,3 +131,33 @@ def test_sparse_search_filters_by_grade():
     hits = sparse_search("hadith", "قال", top_k=5, filters={"grade": "Sahih"})
     assert len(hits) > 0
     assert all(h["payload"]["grade"] == "Sahih" for h in hits)
+
+
+def test_hybrid_search_filters_by_int():
+    hits = hybrid_search("tafsir", "الرحمن", top_k=5, filters={"surah_number": 1})
+    assert len(hits) > 0
+    assert all(h["payload"]["surah_number"] == 1 for h in hits)
+
+
+def test_hybrid_weighted_filters_by_range():
+    hits = hybrid_search_weighted(
+        "books", "العقيدة", top_k=5, filters={"author_death": {"lt": 500}}
+    )
+    assert len(hits) > 0
+    assert all(h["payload"]["author_death"] < 500 for h in hits)
+
+
+def test_dense_search_filters_and_and_list_or():
+    and_hits = dense_search(
+        "quran", "الرحمن", top_k=5, filters={"surah_number": 1, "surah": "الفاتحة"}
+    )
+    assert len(and_hits) > 0
+    assert all(
+        h["payload"]["surah_number"] == 1 and h["payload"]["surah"] == "الفاتحة"
+        for h in and_hits
+    )
+    or_hits = dense_search(
+        "quran", "الرحمن", top_k=5, filters={"surah": ["الفاتحة", "البقرة"]}
+    )
+    assert len(or_hits) > 0
+    assert all(h["payload"]["surah"] in ("الفاتحة", "البقرة") for h in or_hits)

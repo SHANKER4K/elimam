@@ -242,7 +242,11 @@ def sparse_search(
 
 
 def hybrid_search(
-    collection: str, query_text: str, top_k: int = 10, pool: int = 50
+    collection: str,
+    query_text: str,
+    top_k: int = 10,
+    pool: int = 50,
+    filters: dict | None = None,
 ) -> list:
     """Hybrid search: dense + sparse in parallel, fused with RRF.
 
@@ -256,6 +260,8 @@ def hybrid_search(
         top_k: Number of results to return.
         pool: Candidates retrieved per retriever before fusion. Larger = slower;
             50 is enough before reranking.
+        filters: Optional {key: value} metadata filters — same semantics as
+            dense_search (see _build_filter). Applied to both retrievers.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — same type as
@@ -277,6 +283,7 @@ def hybrid_search(
             limit=top_k,
             with_payload=True,
             with_vectors=False,
+            query_filter=_build_filter(collection, filters),
         ).points
     ]
 
@@ -287,6 +294,7 @@ def hybrid_search_weighted(
     top_k: int = 10,
     pool: int = 50,
     weights: tuple[float, float] = (0.7, 0.3),
+    filters: dict | None = None,
 ) -> list:
     """Hybrid search with per-retriever weights (weighted RRF).
 
@@ -302,6 +310,8 @@ def hybrid_search_weighted(
         pool: Candidates retrieved per retriever before fusion.
         weights: (dense_weight, sparse_weight). Both must be >= 0; the bigger
             one dominates the ranking. Tune per collection with real queries.
+        filters: Optional {key: value} metadata filters — same semantics as
+            dense_search (see _build_filter). Sent in the raw HTTP body.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — already the
@@ -321,6 +331,9 @@ def hybrid_search_weighted(
         "with_payload": True,
         "with_vectors": False,
     }
+    query_filter = _build_filter(collection, filters)
+    if query_filter is not None:
+        body["filter"] = query_filter.model_dump()
     response = httpx.post(
         f"{QDRANT_URL}/collections/{collection}/points/query",
         json=body,
