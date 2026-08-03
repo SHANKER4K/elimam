@@ -195,9 +195,26 @@ def dense_search(
         collection: One of "quran", "hadith", "tafsir", "books".
         query_text: Free-text query (Arabic).
         top_k: Number of results to return.
-        filters: Optional {key: value} metadata filters — see _build_filter.
-            Keys must be in FILTER_SCHEMA[collection]; values are scalars
-            (equal), lists (equal-any), or {eq|lt|gt|lte|gte} dicts on int keys.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — same shape as
@@ -229,8 +246,26 @@ def sparse_search(
         collection: One of "quran", "hadith", "tafsir", "books".
         query_text: Free-text query (Arabic). Use exact terms — no stemming.
         top_k: Number of results to return.
-        filters: Optional {key: value} metadata filters — same semantics as
-            dense_search (see _build_filter).
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"}.
@@ -268,8 +303,27 @@ def hybrid_search(
         top_k: Number of results to return.
         pool: Candidates retrieved per retriever before fusion. Larger = slower;
             50 is enough before reranking.
-        filters: Optional {key: value} metadata filters — same semantics as
-            dense_search (see _build_filter). Applied to both retrievers.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match. Applied to both the dense and the
+            sparse retrievers before fusion.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — same type as
@@ -318,8 +372,26 @@ def hybrid_search_weighted(
         pool: Candidates retrieved per retriever before fusion.
         weights: (dense_weight, sparse_weight). Both must be >= 0; the bigger
             one dominates the ranking. Tune per collection with real queries.
-        filters: Optional {key: value} metadata filters — same semantics as
-            dense_search (see _build_filter). Sent in the raw HTTP body.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match. Sent in the raw HTTP request body.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — already the
