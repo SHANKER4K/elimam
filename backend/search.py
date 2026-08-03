@@ -68,6 +68,113 @@ def _sparse_query(text: str) -> models.SparseVector:
     return models.SparseVector(indices=sv.indices.tolist(), values=sv.values.tolist())
 
 
+# Allowed filter keys per collection with their value type.
+# "int" keys accept scalars, lists, or {eq|lt|gt|lte|gte: number} dicts.
+# "str" keys accept scalars or lists. Anything else raises ValueError.
+FILTER_SCHEMA: dict[str, dict[str, str]] = {
+    "quran": {"surah_number": "int", "surah": "str"},
+    "hadith": {"book": "str", "grade": "str"},
+    "tafsir": {"surah_number": "int", "surah": "str", "ayah_number": "int"},
+    "books": {
+        "book_id": "int",
+        "book_name": "str",
+        "category_name": "str",
+        "all_authors": "str",
+        "author_death": "int",
+        "bood_data": "int",
+    },
+}
+
+_OPS = {"eq", "lt", "gt", "lte", "gte"}
+
+
+def _build_filter(collection: str, filters: dict | None) -> models.Filter | None:
+    """Translate {key: value} filters into a Qdrant Filter (or None for no filter).
+
+    Value forms (multiple keys are AND-combined):
+      scalar       -> equal match (MatchValue)
+      list         -> equal to any of the values (MatchAny, OR within the key)
+      dict (int)   -> {eq|lt|gt|lte|gte: number}; eq becomes MatchValue, the
+                      remaining ops combine into one Range condition
+
+    Raises ValueError on unknown keys, wrong value types, unknown ops, empty
+    lists, bool values, and None values.
+    """
+    if not filters:
+        return None
+    schema = FILTER_SCHEMA[collection]
+    conditions = []
+    for key, value in filters.items():
+        if key not in schema:
+            raise ValueError(
+                f"Unknown filter key {key!r} for {collection!r}; allowed: {sorted(schema)}"
+            )
+        kind = schema[key]
+        if isinstance(value, list):
+            if not value:
+                raise ValueError(f"Filter {key!r}: list must not be empty")
+            if kind == "str":
+                if not all(isinstance(v, str) for v in value):
+                    raise ValueError(f"Filter {key!r}: list elements must be str")
+            elif any(
+                isinstance(v, bool) or not isinstance(v, (int, float)) for v in value
+            ):
+                raise ValueError(f"Filter {key!r}: list elements must be numbers")
+            conditions.append(
+                models.FieldCondition(key=key, match=models.MatchAny(any=value))
+            )
+        elif kind == "int":
+            if isinstance(value, bool):
+                raise ValueError(f"Filter {key!r}: bool is not allowed")
+            if isinstance(value, dict):
+                bad_ops = set(value) - _OPS
+                if bad_ops:
+                    raise ValueError(
+                        f"Filter {key!r}: unknown op(s) {sorted(bad_ops)}; "
+                        f"allowed: {sorted(_OPS)}"
+                    )
+                if any(
+                    isinstance(v, bool) or not isinstance(v, (int, float))
+                    for v in value.values()
+                ):
+                    raise ValueError(f"Filter {key!r}: op values must be numbers")
+                if "eq" in value:
+                    conditions.append(
+                        models.FieldCondition(
+                            key=key, match=models.MatchValue(value=value["eq"])
+                        )
+                    )
+                ranges = {
+                    op: value[op] for op in ("lt", "gt", "lte", "gte") if op in value
+                }
+                if ranges:
+                    conditions.append(
+                        models.FieldCondition(key=key, range=models.Range(**ranges))
+                    )
+            elif isinstance(value, (int, float)):
+                conditions.append(
+                    models.FieldCondition(key=key, match=models.MatchValue(value=value))
+                )
+            else:
+                raise ValueError(
+                    f"Filter {key!r}: expected a number or {{op: number}}, "
+                    f"got {type(value).__name__}"
+                )
+        else:  # "str" keys
+            if isinstance(value, dict):
+                raise ValueError(
+                    f"Filter {key!r}: comparison ops only work on integer keys"
+                )
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"Filter {key!r}: expected str, got {type(value).__name__}"
+                )
+            conditions.append(
+                models.FieldCondition(key=key, match=models.MatchValue(value=value))
+            )
+    return models.Filter(must=conditions)
+
+
 def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
     """Search one collection by dense vector similarity.
 
@@ -83,14 +190,17 @@ def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
         List of dicts: {"id", "version", "score", "payload"} — same shape as
         every other search function.
     """
-    return [p.model_dump() for p in client.query_points(
-        collection_name=collection,
-        query=_dense_query(query_text),
-        using="dense",
-        limit=top_k,
-        with_payload=True,
-        with_vectors=False,
-    ).points]
+    return [
+        p.model_dump()
+        for p in client.query_points(
+            collection_name=collection,
+            query=_dense_query(query_text),
+            using="dense",
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        ).points
+    ]
 
 
 def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
@@ -107,17 +217,22 @@ def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
     Returns:
         List of dicts: {"id", "version", "score", "payload"}.
     """
-    return [p.model_dump() for p in client.query_points(
-        collection_name=collection,
-        query=_sparse_query(query_text),
-        using="sparse",
-        limit=top_k,
-        with_payload=True,
-        with_vectors=False,
-    ).points]
+    return [
+        p.model_dump()
+        for p in client.query_points(
+            collection_name=collection,
+            query=_sparse_query(query_text),
+            using="sparse",
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        ).points
+    ]
 
 
-def hybrid_search(collection: str, query_text: str, top_k: int = 10, pool: int = 50) -> list:
+def hybrid_search(
+    collection: str, query_text: str, top_k: int = 10, pool: int = 50
+) -> list:
     """Hybrid search: dense + sparse in parallel, fused with RRF.
 
     Runs dense (cosine) and sparse (BM25) searches in parallel via prefetch,
@@ -135,17 +250,24 @@ def hybrid_search(collection: str, query_text: str, top_k: int = 10, pool: int =
         List of dicts: {"id", "version", "score", "payload"} — same type as
         every other search function.
     """
-    return [p.model_dump() for p in client.query_points(
-        collection_name=collection,
-        prefetch=[
-            models.Prefetch(query=_dense_query(query_text), using="dense", limit=pool),
-            models.Prefetch(query=_sparse_query(query_text), using="sparse", limit=pool),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=top_k,
-        with_payload=True,
-        with_vectors=False,
-    ).points]
+    return [
+        p.model_dump()
+        for p in client.query_points(
+            collection_name=collection,
+            prefetch=[
+                models.Prefetch(
+                    query=_dense_query(query_text), using="dense", limit=pool
+                ),
+                models.Prefetch(
+                    query=_sparse_query(query_text), using="sparse", limit=pool
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        ).points
+    ]
 
 
 def hybrid_search_weighted(
@@ -177,7 +299,11 @@ def hybrid_search_weighted(
     body = {
         "prefetch": [
             {"query": _dense_query(query_text), "using": "dense", "limit": pool},
-            {"query": _sparse_query(query_text).model_dump(), "using": "sparse", "limit": pool},
+            {
+                "query": _sparse_query(query_text).model_dump(),
+                "using": "sparse",
+                "limit": pool,
+            },
         ],
         "query": {"fusion": "rrf", "weights": list(weights)},
         "limit": top_k,
@@ -274,12 +400,16 @@ def get_book(category: int, book_id: int, chunk_index: int):
     return []
 
 
-get_tafsir("tabary", "1:7")
-get_hadith("bukhari", 2.0)
-get_book(1, 121, 1)
 HADITH_BOOKS = [
-    "abudawud", "bukhari", "dehlawi", "ibnmajah", "malik",
-    "nasai", "nawawi", "qudsi", "tirmidhi",
+    "abudawud",
+    "bukhari",
+    "dehlawi",
+    "ibnmajah",
+    "malik",
+    "nasai",
+    "nawawi",
+    "qudsi",
+    "tirmidhi",
 ]
 
 TAFSIR_BOOKS = ["saadi", "katheer", "moyassar", "tabary", "baghawy"]

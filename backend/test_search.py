@@ -72,3 +72,50 @@ def test_get_books_books_returns_titles():
     assert all(isinstance(b, str) and b for b in books)
     assert "منهاج السنة النبوية" in books
     assert "إجماع السلف في الاعتقاد كما حكاه حرب الكرماني" in books
+
+
+from search import FILTER_SCHEMA, _build_filter
+
+
+def test_build_filter_scalar_and_conditions():
+    f = _build_filter("quran", {"surah": "الفاتحة", "surah_number": 1})
+    # ponytail: exclude_none=True — qdrant-client 1.18 dumps None optionals
+    # (range, geo_bounding_box, ...) on FieldCondition, so plain model_dump()
+    # never equals the compact dict the assertions expect.
+    must = f.model_dump(exclude_none=True)["must"]
+    assert len(must) == 2
+    assert {"key": "surah", "match": {"value": "الفاتحة"}} in must
+    assert {"key": "surah_number", "match": {"value": 1}} in must
+
+
+def test_build_filter_range_ops():
+    f = _build_filter("quran", {"surah_number": {"gte": 2, "lt": 5}})
+    cond = f.model_dump()["must"][0]
+    assert cond["key"] == "surah_number"
+    assert cond["range"] == {"gt": None, "gte": 2, "lt": 5, "lte": None}
+
+
+def test_build_filter_dict_eq():
+    f = _build_filter("books", {"book_id": {"eq": 121}})
+    assert f.model_dump()["must"][0]["match"] == {"value": 121}
+
+
+def test_build_filter_list_or():
+    f = _build_filter("quran", {"surah": ["الفاتحة", "البقرة"]})
+    cond = f.model_dump()["must"][0]
+    assert cond["match"] == {"any": ["الفاتحة", "البقرة"]}
+
+
+def test_build_filter_validation_errors():
+    for bad in (
+        {"gradee": "Sahih"},                          # unknown key
+        {"surah_number": "abc"},                      # str on int key
+        {"surah": 5},                                 # int on str key
+        {"surah": {"gte": 1}},                        # ops on str key
+        {"surah_number": {"gte": 2, "magic": 1}},     # unknown op
+        {"surah_number": []},                         # empty list
+        {"surah_number": True},                       # bool value
+        {"surah_number": None},                       # None value
+    ):
+        with pytest.raises(ValueError):
+            _build_filter("quran", bad)
