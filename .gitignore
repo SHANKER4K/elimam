@@ -1,6 +1,7 @@
 *.db
 *.pt
 *.env
+.pi*
 shameladb
 Islam
 models
@@ -18,3 +19,4 @@ data/
 tensors/
 node_modules/
 tafsir_data/
+qdrant_storage/
