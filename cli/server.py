@@ -332,7 +332,9 @@ def hybrid_quran_search(
             query_texts=[q], n_results=n, where=_where, where_document=_where_document
         )
 
-    results = hybrid_search_verses(query, k=k, semantic_func=semantic_fn, alpha=alpha)
+    results = hybrid_search_verses(
+        query, k=k, semantic_func=semantic_fn if alpha > 0 else None, alpha=alpha
+    )
 
     # إضافة أسماء السور وأرقام الآيات
     for r in results:
@@ -346,14 +348,17 @@ def hybrid_quran_search(
             # من Whoosh
             pass  # Whoosh تخزنها في الحقول
 
-    texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
-    ranks = reranker.rank(query, texts)
+    if alpha > 0:
+        texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
+        ranks = reranker.rank(query, texts)
 
-    res = []
-    for r in ranks:
-        if r["score"] > threshold:
-            doc = results[int(r["corpus_id"])]
-            res.append({**doc, "score": float(r["score"])})
+        res = []
+        for r in ranks:
+            if r["score"] > threshold:
+                doc = results[int(r["corpus_id"])]
+                res.append({**doc, "score": float(r["score"])})
+    else:
+        res = results
     return res
 
 
@@ -384,7 +389,9 @@ def hybrid_hadith_search(
             query_texts=[q], n_results=n, where=_where, where_document=_where_document
         )
 
-    results = hybrid_search_hadith(query, k=k, semantic_func=semantic_fn, alpha=alpha)
+    results = hybrid_search_hadith(
+        query, k=k, semantic_func=semantic_fn if alpha > 0 else None, alpha=alpha
+    )
 
     # استخرج meta من ChromaDB إذا كانت موجودة
     for r in results:
@@ -398,13 +405,16 @@ def hybrid_hadith_search(
             r["source"] = r["meta"].get("source", "")
             del r["meta"]
 
-    texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
-    ranks = reranker.rank(query, texts)
-    res = []
-    for r in ranks:
-        if r["score"] > threshold:
-            doc = results[int(r["corpus_id"])]
-            res.append({**doc, "score": float(r["score"])})
+    if alpha > 0:
+        texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
+        ranks = reranker.rank(query, texts)
+        res = []
+        for r in ranks:
+            if r["score"] > threshold:
+                doc = results[int(r["corpus_id"])]
+                res.append({**doc, "score": float(r["score"])})
+    else:
+        res = results
     return res
 
 
@@ -435,7 +445,9 @@ def hybrid_aqeedah_search(
             query_texts=[q], n_results=n, where=_where, where_document=_where_document
         )
 
-    results = hybrid_search_aqeedah(query, k=k, semantic_func=semantic_fn, alpha=alpha)
+    results = hybrid_search_aqeedah(
+        query, k=k, semantic_func=semantic_fn if alpha > 0 else None, alpha=alpha
+    )
 
     for r in results:
         if "meta" in r:
@@ -448,13 +460,16 @@ def hybrid_aqeedah_search(
             r["source"] = r["meta"].get("source", "")
             del r["meta"]
 
-    texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
-    ranks = reranker.rank(query, texts)
-    res = []
-    for r in ranks:
-        if r["score"] > threshold:
-            doc = results[int(r["corpus_id"])]
-            res.append({**doc, "score": float(r["score"])})
+    if alpha > 0:
+        texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
+        ranks = reranker.rank(query, texts)
+        res = []
+        for r in ranks:
+            if r["score"] > threshold:
+                doc = results[int(r["corpus_id"])]
+                res.append({**doc, "score": float(r["score"])})
+    else:
+        res = results
     return res
 
 
@@ -485,7 +500,9 @@ def hybrid_tafsir_search(
             query_texts=[q], n_results=n, where=_where, where_document=_where_document
         )
 
-    results = hybrid_search_tafsir(query, k=k, semantic_func=semantic_fn, alpha=alpha)
+    results = hybrid_search_tafsir(
+        query, k=k, semantic_func=semantic_fn if alpha > 0 else None, alpha=alpha
+    )
 
     # استخرج meta من ChromaDB إذا كانت موجودة
     for r in results:
@@ -496,11 +513,14 @@ def hybrid_tafsir_search(
             r["ayah_number"] = r["meta"].get("ayah_number", 0)
             del r["meta"]
 
-    texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
-    ranks = reranker.rank(query, texts)
-    res = []
-    for r in ranks:
-        if r["score"] > threshold:
-            doc = results[int(r["corpus_id"])]
-            res.append({**doc, "score": float(r["score"])})
+    if alpha > 0:
+        texts = [normalize_alef_ar(dediac_ar(d["text"])) for d in results]
+        ranks = reranker.rank(query, texts)
+        res = []
+        for r in ranks:
+            if r["score"] > threshold:
+                doc = results[int(r["corpus_id"])]
+                res.append({**doc, "score": float(r["score"])})
+    else:
+        res = results
     return res

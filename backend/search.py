@@ -53,7 +53,9 @@ def setup_indexes():
         )
     for collection, index_set in fields.items():
         for field, schema in index_set:
-            client.create_payload_index(collection, field_name=field, field_schema=schema)
+            client.create_payload_index(
+                collection, field_name=field, field_schema=schema
+            )
 
 
 def _preprocess(text: str) -> str:

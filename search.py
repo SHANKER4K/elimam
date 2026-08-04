@@ -20,29 +20,39 @@ client = QdrantClient(url=QDRANT_URL)
 
 
 def setup_indexes():
-    """Create payload indexes for every field used in filters.
+    """Create payload indexes for every field used in getters and filters.
 
-    Must run once per server start (idempotent — safe to call repeatedly).
-    Makes get_quran/get_hadith/get_tafsir/get_book use indexed lookups instead
-    of a full payload scan (books collection has ~148k points).
+    Idempotent — safe to call repeatedly. Makes getter lookups and filtered
+    searches use indexed access instead of full payload scans (books has
+    ~148k points).
     """
-    index_fields = {
-        "quran": [("ids", models.PayloadSchemaType.KEYWORD)],
-        "hadith": [
+    kind_schema = {
+        "int": models.PayloadSchemaType.INTEGER,
+        "str": models.PayloadSchemaType.KEYWORD,
+    }
+    # Getter-only fields (ids, book, tafsir_book, book_id) are not in
+    # FILTER_SCHEMA; filter keys are derived from it (single source of truth).
+    fields: dict[str, set[tuple[str, models.PayloadSchemaType]]] = {
+        "quran": {("ids", models.PayloadSchemaType.KEYWORD)},
+        "hadith": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("book", models.PayloadSchemaType.KEYWORD),
-        ],
-        "tafsir": [
+        },
+        "tafsir": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("tafsir_book", models.PayloadSchemaType.KEYWORD),
-        ],
-        "books": [
+        },
+        "books": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("book_id", models.PayloadSchemaType.INTEGER),
-        ],
+        },
     }
-    for collection, fields in index_fields.items():
-        for field, schema in fields:
+    for collection, keys in FILTER_SCHEMA.items():
+        fields[collection].update(
+            (key, kind_schema[kind]) for key, kind in keys.items()
+        )
+    for collection, index_set in fields.items():
+        for field, schema in index_set:
             client.create_payload_index(
                 collection, field_name=field, field_schema=schema
             )
@@ -68,7 +78,116 @@ def _sparse_query(text: str) -> models.SparseVector:
     return models.SparseVector(indices=sv.indices.tolist(), values=sv.values.tolist())
 
 
-def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
+# Allowed filter keys per collection with their value type.
+# "int" keys accept scalars, lists, or {eq|lt|gt|lte|gte: number} dicts.
+# "str" keys accept scalars or lists. Anything else raises ValueError.
+FILTER_SCHEMA: dict[str, dict[str, str]] = {
+    "quran": {"surah_number": "int", "surah": "str"},
+    "hadith": {"book": "str", "grade": "str"},
+    "tafsir": {"surah_number": "int", "surah": "str", "ayah_number": "int"},
+    "books": {
+        "book_id": "int",
+        "book_name": "str",
+        "category_name": "str",
+        "all_authors": "str",
+        "author_death": "int",
+        "bood_data": "int",
+    },
+}
+
+_OPS = {"eq", "lt", "gt", "lte", "gte"}
+
+
+def _build_filter(collection: str, filters: dict | None) -> models.Filter | None:
+    """Translate {key: value} filters into a Qdrant Filter (or None for no filter).
+
+    Value forms (multiple keys are AND-combined):
+      scalar       -> equal match (MatchValue)
+      list         -> equal to any of the values (MatchAny, OR within the key)
+      dict (int)   -> {eq|lt|gt|lte|gte: number}; eq becomes MatchValue, the
+                      remaining ops combine into one Range condition
+
+    Raises ValueError on unknown keys, wrong value types, unknown ops, empty
+    lists, bool values, and None values.
+    """
+    if not filters:
+        return None
+    schema = FILTER_SCHEMA[collection]
+    conditions = []
+    for key, value in filters.items():
+        if key not in schema:
+            raise ValueError(
+                f"Unknown filter key {key!r} for {collection!r}; allowed: {sorted(schema)}"
+            )
+        kind = schema[key]
+        if isinstance(value, list):
+            if not value:
+                raise ValueError(f"Filter {key!r}: list must not be empty")
+            if kind == "str":
+                if not all(isinstance(v, str) for v in value):
+                    raise ValueError(f"Filter {key!r}: list elements must be str")
+            elif any(
+                isinstance(v, bool) or not isinstance(v, (int, float)) for v in value
+            ):
+                raise ValueError(f"Filter {key!r}: list elements must be numbers")
+            conditions.append(
+                models.FieldCondition(key=key, match=models.MatchAny(any=value))
+            )
+        elif kind == "int":
+            if isinstance(value, bool):
+                raise ValueError(f"Filter {key!r}: bool is not allowed")
+            if isinstance(value, dict):
+                bad_ops = set(value) - _OPS
+                if bad_ops:
+                    raise ValueError(
+                        f"Filter {key!r}: unknown op(s) {sorted(bad_ops)}; "
+                        f"allowed: {sorted(_OPS)}"
+                    )
+                if any(
+                    isinstance(v, bool) or not isinstance(v, (int, float))
+                    for v in value.values()
+                ):
+                    raise ValueError(f"Filter {key!r}: op values must be numbers")
+                if "eq" in value:
+                    conditions.append(
+                        models.FieldCondition(
+                            key=key, match=models.MatchValue(value=value["eq"])
+                        )
+                    )
+                ranges = {
+                    op: value[op] for op in ("lt", "gt", "lte", "gte") if op in value
+                }
+                if ranges:
+                    conditions.append(
+                        models.FieldCondition(key=key, range=models.Range(**ranges))
+                    )
+            elif isinstance(value, (int, float)):
+                conditions.append(
+                    models.FieldCondition(key=key, match=models.MatchValue(value=value))
+                )
+            else:
+                raise ValueError(
+                    f"Filter {key!r}: expected a number or {{op: number}}, "
+                    f"got {type(value).__name__}"
+                )
+        else:  # "str" keys
+            if isinstance(value, dict):
+                raise ValueError(
+                    f"Filter {key!r}: comparison ops only work on integer keys"
+                )
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"Filter {key!r}: expected str, got {type(value).__name__}"
+                )
+            conditions.append(
+                models.FieldCondition(key=key, match=models.MatchValue(value=value))
+            )
+    return models.Filter(must=conditions)
+
+
+def dense_search(
+    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
+) -> list:
     """Search one collection by dense vector similarity.
 
     Embeds `query_text` with the ONNX model (preprocessed like training data)
@@ -78,6 +197,26 @@ def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
         collection: One of "quran", "hadith", "tafsir", "books".
         query_text: Free-text query (Arabic).
         top_k: Number of results to return.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — same shape as
@@ -92,11 +231,14 @@ def dense_search(collection: str, query_text: str, top_k: int = 10) -> list:
             limit=top_k,
             with_payload=True,
             with_vectors=False,
+            query_filter=_build_filter(collection, filters),
         ).points
     ]
 
 
-def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
+def sparse_search(
+    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
+) -> list:
     """Search one collection by exact BM25 keyword match.
 
     Embeds `query_text` with fastembed Qdrant/bm25 and searches the `sparse`
@@ -106,6 +248,26 @@ def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
         collection: One of "quran", "hadith", "tafsir", "books".
         query_text: Free-text query (Arabic). Use exact terms — no stemming.
         top_k: Number of results to return.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"}.
@@ -119,12 +281,17 @@ def sparse_search(collection: str, query_text: str, top_k: int = 10) -> list:
             limit=top_k,
             with_payload=True,
             with_vectors=False,
+            query_filter=_build_filter(collection, filters),
         ).points
     ]
 
 
 def hybrid_search(
-    collection: str, query_text: str, top_k: int = 10, pool: int = 50
+    collection: str,
+    query_text: str,
+    top_k: int = 10,
+    pool: int = 50,
+    filters: dict | None = None,
 ) -> list:
     """Hybrid search: dense + sparse in parallel, fused with RRF.
 
@@ -138,6 +305,27 @@ def hybrid_search(
         top_k: Number of results to return.
         pool: Candidates retrieved per retriever before fusion. Larger = slower;
             50 is enough before reranking.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match. Applied to both the dense and the
+            sparse retrievers before fusion.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — same type as
@@ -159,6 +347,7 @@ def hybrid_search(
             limit=top_k,
             with_payload=True,
             with_vectors=False,
+            query_filter=_build_filter(collection, filters),
         ).points
     ]
 
@@ -169,6 +358,7 @@ def hybrid_search_weighted(
     top_k: int = 10,
     pool: int = 50,
     weights: tuple[float, float] = (0.7, 0.3),
+    filters: dict | None = None,
 ) -> list:
     """Hybrid search with per-retriever weights (weighted RRF).
 
@@ -184,6 +374,26 @@ def hybrid_search_weighted(
         pool: Candidates retrieved per retriever before fusion.
         weights: (dense_weight, sparse_weight). Both must be >= 0; the bigger
             one dominates the ranking. Tune per collection with real queries.
+        filters: Optional metadata filters to narrow results before scoring.
+            Default None (or {}) = no filtering. Multiple keys are ANDed —
+            every condition must match. Sent in the raw HTTP request body.
+
+            Value forms:
+              scalar       equal match            {"surah": "الفاتحة"}
+              list         equal-any (OR in key)  {"surah": ["الفاتحة", "البقرة"]}
+              dict (int)   comparisons eq/lt/gt/lte/gte
+                                                   {"surah_number": {"gte": 2, "lt": 10}}
+                                                   {"author_death": {"lt": 500}}
+
+            Allowed keys per collection (see FILTER_SCHEMA):
+              quran  -> surah_number (int), surah (str)
+              hadith -> book (str), grade (str)
+              tafsir -> surah_number (int), surah (str), ayah_number (int)
+              books  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), bood_data (int)
+
+            Raises ValueError for unknown keys, wrong value types, unknown
+            operators, empty lists, and bool values.
 
     Returns:
         List of dicts: {"id", "version", "score", "payload"} — already the
@@ -203,6 +413,9 @@ def hybrid_search_weighted(
         "with_payload": True,
         "with_vectors": False,
     }
+    query_filter = _build_filter(collection, filters)
+    if query_filter is not None:
+        body["filter"] = query_filter.model_dump()
     response = httpx.post(
         f"{QDRANT_URL}/collections/{collection}/points/query",
         json=body,

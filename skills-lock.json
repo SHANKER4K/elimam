@@ -18,6 +18,48 @@
       "sourceType": "github",
       "skillPath": "skills/pydantic-ai-harness/SKILL.md",
       "computedHash": "a40593e8a2232dd733419385d336df04aba4029f9244e077f0258a8d47093cb3"
+    },
+    "qdrant-advisor": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "meta/qdrant-advisor/SKILL.md",
+      "computedHash": "847fd40916d767cde7cf266a4213d6645b125e6103daea3a313d99075ec209f0"
+    },
+    "qdrant-model-migration": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-model-migration/SKILL.md",
+      "computedHash": "6a40dfbc656404be20db1bbc427f05a66d7e2a7d30ce18432a43d140843e426a"
+    },
+    "qdrant-monitoring": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-monitoring/SKILL.md",
+      "computedHash": "38afe0d8f006d7febb82390d244a3c5235156569c2671589c437511480e67a6b"
+    },
+    "qdrant-multitenancy": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-multitenancy/SKILL.md",
+      "computedHash": "14ef395c4dc65b082d4c56d04a7fc4426a745fde486b8d8f93af078606d19ab7"
+    },
+    "qdrant-performance-optimization": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-performance-optimization/SKILL.md",
+      "computedHash": "bb2985424d1a1c754f8590b3478678061298652d84e64552919eecf14b03558c"
+    },
+    "qdrant-scaling": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-scaling/SKILL.md",
+      "computedHash": "f3f7a204858b2068b9d7ba5ff4be2000e17e9b3ef5a0c455cf99467ae9d752ee"
+    },
+    "qdrant-search-quality": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-search-quality/SKILL.md",
+      "computedHash": "fc840f2df6e1eb9255b97eb6b1c0702850e6edf4cc829fd1f7e9fb6ba5fc9dbe"
     }
   }
 }
