@@ -20,3 +20,4 @@ tensors/
 node_modules/
 tafsir_data/
 qdrant_storage/
+.worktrees/
