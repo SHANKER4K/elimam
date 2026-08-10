@@ -1,4 +1,5 @@
 import httpx
+import json
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient, models
 from sentence_transformers import SentenceTransformer
@@ -7,11 +8,12 @@ from camel_tools.utils.normalize import normalize_alef_ar
 
 QDRANT_URL = "http://localhost:6333"
 
+print("Loading Model")
 model = SentenceTransformer(
-    "models/gate_arabert_onnx",
-    backend="onnx",
-    model_kwargs={"file_name": "model_int8.onnx"},
+    "Omartificial-Intelligence-Space/GATE-AraBert-v1", model_kwargs={"dtype": "float16"}
 )
+print("Done")
+
 
 # BM25 TF vectors; IDF is applied by Qdrant via Modifier.IDF (collection config)
 sparse_model = SparseTextEmbedding("Qdrant/bm25")
@@ -43,6 +45,10 @@ def setup_indexes():
             ("tafsir_book", models.PayloadSchemaType.KEYWORD),
         },
         "books": {
+            ("ids", models.PayloadSchemaType.KEYWORD),
+            ("book_id", models.PayloadSchemaType.INTEGER),
+        },
+        "sunnah": {
             ("ids", models.PayloadSchemaType.KEYWORD),
             ("book_id", models.PayloadSchemaType.INTEGER),
         },
@@ -91,7 +97,16 @@ FILTER_SCHEMA: dict[str, dict[str, str]] = {
         "category_name": "str",
         "all_authors": "str",
         "author_death": "int",
-        "bood_data": "int",
+        "book_date": "int",
+    },
+    "sunnah": {
+        "book_id": "int",
+        "book_name": "str",
+        "category_name": "str",
+        "all_authors": "str",
+        "author_death": "int",
+        "book_date": "int",
+        "athar_number": "int",
     },
 }
 
@@ -112,6 +127,7 @@ def _build_filter(collection: str, filters: dict | None) -> models.Filter | None
     """
     if not filters:
         return None
+
     schema = FILTER_SCHEMA[collection]
     conditions = []
     for key, value in filters.items():
@@ -194,7 +210,7 @@ def dense_search(
     and returns the `top_k` nearest points by cosine over the `dense` vectors.
 
     Args:
-        collection: One of "quran", "hadith", "tafsir", "books".
+        collection: One of "quran", "hadith", "tafsir", "books", "sunnah".
         query_text: Free-text query (Arabic).
         top_k: Number of results to return.
         filters: Optional metadata filters to narrow results before scoring.
@@ -213,7 +229,10 @@ def dense_search(
               hadith -> book (str), grade (str)
               tafsir -> surah_number (int), surah (str), ayah_number (int)
               books  -> book_id (int), book_name (str), category_name (str),
-                        all_authors (str), author_death (int), bood_data (int)
+                        all_authors (str), author_death (int), book_date (int)
+
+              sunnah  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), book_date (int), athar_number (int)
 
             Raises ValueError for unknown keys, wrong value types, unknown
             operators, empty lists, and bool values.
@@ -222,6 +241,9 @@ def dense_search(
         List of dicts: {"id", "version", "score", "payload"} — same shape as
         every other search function.
     """
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+
     return [
         p.model_dump()
         for p in client.query_points(
@@ -245,7 +267,7 @@ def sparse_search(
     vectors. Catches exact term matches that dense search misses.
 
     Args:
-        collection: One of "quran", "hadith", "tafsir", "books".
+        collection: One of "quran", "hadith", "tafsir", "books", "sunnah".
         query_text: Free-text query (Arabic). Use exact terms — no stemming.
         top_k: Number of results to return.
         filters: Optional metadata filters to narrow results before scoring.
@@ -264,7 +286,9 @@ def sparse_search(
               hadith -> book (str), grade (str)
               tafsir -> surah_number (int), surah (str), ayah_number (int)
               books  -> book_id (int), book_name (str), category_name (str),
-                        all_authors (str), author_death (int), bood_data (int)
+                        all_authors (str), author_death (int), book_date (int)
+            sunnah  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), book_date (int), athar_number (int)
 
             Raises ValueError for unknown keys, wrong value types, unknown
             operators, empty lists, and bool values.
@@ -272,6 +296,9 @@ def sparse_search(
     Returns:
         List of dicts: {"id", "version", "score", "payload"}.
     """
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+
     return [
         p.model_dump()
         for p in client.query_points(
@@ -300,7 +327,7 @@ def hybrid_search(
     rank-based, so the incomparable cosine/BM25 score scales don't matter.
 
     Args:
-        collection: One of "quran", "hadith", "tafsir", "books".
+        collection: One of "quran", "hadith", "tafsir", "books", "sunnah".
         query_text: Free-text query (Arabic).
         top_k: Number of results to return.
         pool: Candidates retrieved per retriever before fusion. Larger = slower;
@@ -322,7 +349,9 @@ def hybrid_search(
               hadith -> book (str), grade (str)
               tafsir -> surah_number (int), surah (str), ayah_number (int)
               books  -> book_id (int), book_name (str), category_name (str),
-                        all_authors (str), author_death (int), bood_data (int)
+                        all_authors (str), author_death (int), book_date (int)
+            sunnah  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), book_date (int), athar_number (int)
 
             Raises ValueError for unknown keys, wrong value types, unknown
             operators, empty lists, and bool values.
@@ -331,6 +360,9 @@ def hybrid_search(
         List of dicts: {"id", "version", "score", "payload"} — same type as
         every other search function.
     """
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+
     return [
         p.model_dump()
         for p in client.query_points(
@@ -368,7 +400,7 @@ def hybrid_search_weighted(
     Qdrant server supports it.
 
     Args:
-        collection: One of "quran", "hadith", "tafsir", "books".
+        collection: One of "quran", "hadith", "tafsir", "books", "sunnah".
         query_text: Free-text query (Arabic).
         top_k: Number of results to return.
         pool: Candidates retrieved per retriever before fusion.
@@ -390,7 +422,9 @@ def hybrid_search_weighted(
               hadith -> book (str), grade (str)
               tafsir -> surah_number (int), surah (str), ayah_number (int)
               books  -> book_id (int), book_name (str), category_name (str),
-                        all_authors (str), author_death (int), bood_data (int)
+                        all_authors (str), author_death (int), book_date (int)
+            sunnah  -> book_id (int), book_name (str), category_name (str),
+                        all_authors (str), author_death (int), book_date (int), athar_number (int)
 
             Raises ValueError for unknown keys, wrong value types, unknown
             operators, empty lists, and bool values.
@@ -399,6 +433,9 @@ def hybrid_search_weighted(
         List of dicts: {"id", "version", "score", "payload"} — already the
         raw JSON shape from the HTTP response, same type as the other three.
     """
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+
     body = {
         "prefetch": [
             {"query": _dense_query(query_text), "using": "dense", "limit": pool},
@@ -489,6 +526,27 @@ def get_book(category: int, book_id: int, chunk_index: int):
     """Get one book chunk by category, book_id, chunk_index. Returns the payload dict or []"""
     val, _ = client.scroll(
         collection_name="books",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="ids",
+                    match=models.MatchValue(
+                        value=f"{category}:{book_id}:{chunk_index}"
+                    ),
+                )
+            ]
+        ),
+        with_vectors=False,
+    )
+    if val:
+        return val[0].payload
+    return []
+
+
+def get_suunah(category: int, book_id: int, chunk_index: int):
+    """Get one book chunk by category, book_id, chunk_index. Returns the payload dict or []"""
+    val, _ = client.scroll(
+        collection_name="sunnah",
         scroll_filter=models.Filter(
             must=[
                 models.FieldCondition(
@@ -783,12 +841,137 @@ BOOKS_LIST = [
     "كلمة الإخلاص وتحقيق معناها - ضمن رسائل ابن رجب",
 ]
 
+SUNNAH_BOOKS = [
+    "السنة لعبد الله بن أحمد",
+    "الحث على التجارة - من «الجامع» للخلال - ت العوضي",
+    "السنة لأبي بكر بن الخلال",
+    "بر الوالدين - البخاري - ت مكي",
+    "المعجم الكبير للطبراني",
+    "العلل ومعرفة الرجال لأحمد رواية ابنه عبد الله",
+    "العقل وفضله لابن أبي الدنيا",
+    "الأسامي والكنى - الإمام أحمد",
+    "سؤالات أبي داود للإمام أحمد",
+    "اصطناع المعروف لابن أبي الدنيا",
+    "العلل ومعرفة الرجال لأحمد رواية المروذي وغيره ت صبحي السامرائي",
+    "مسائل الإمام أحمد رواية ابنه عبد الله",
+    "الإخلاص والنية لابن أبي الدنيا",
+    "اختصاص القرآن بعوده إلى الرحيم الرحمن",
+    "أصول السنة لأحمد بن حنبل",
+    "قصر الأمل لابن أبي الدنيا",
+    "سنن الترمذي - ت بشار",
+    "مكائد الشيطان",
+    "ذم الكذب - من الصمت وآداب اللسان",
+    "الأربعون حديثا للآجري",
+    "الإبانة الكبرى - ابن بطة",
+    "الأمر بالمعروف والنهي عن المنكر- ابن أبي الدنيا",
+    "الحث على التجارة - من «الجامع» للخلال - ت الحداد",
+    "الزهد لابن أبي الدنيا",
+    "اليقين لابن أبي الدنيا",
+    "تحريم النرد والشطرنج والملاهي للآجري",
+    "ذم البغى لابن أبي الدنيا",
+    "ذم الملاهي لابن أبي الدنيا",
+    "صفة الجنة لابن أبي الدنيا ت سليم",
+    "ذم الغيبة والنميمة لابن أبي الدنيا",
+    "كلام الليالي والأيام لابن أبي الدنيا",
+    "أدب النفوس للآجري",
+    "التوبة لابن أبي الدنيا",
+    "التوكل على الله لابن أبي الدنيا",
+    "الرقة والبكاء لابن أبي الدنيا",
+    "الصبر والثواب عليه لابن أبي الدنيا",
+    "العقوبات لابن أبي الدنيا",
+    "المطر والرعد والبرق لابن أبي الدنيا",
+    "الزهد لأحمد بن حنبل",
+    "شرح السنة للبربهاري",
+    "العقائد الإسلامية لابن باديس",
+    "الجوع لابن أبي الدنيا",
+    "الفرج بعد الشدة لابن أبي الدنيا",
+    "فضائل عثمان بن عفان لعبد الله بن أحمد",
+    "ذم اللواط للآجري",
+    "مسند الشافعي - ترتيب سنجر",
+    "أصول السنة لابن أبي زمنين",
+    "العلل ومعرفة الرجال لأحمد رواية المروذي وغيره ت وصي الله عباس",
+    "القبور لابن أبي الدنيا",
+    "فضائل رمضان لابن أبي الدنيا",
+    "قرى الضيف لابن أبي الدنيا",
+    "الأهوال لابن أبي الدنيا",
+    "صفة الجنة لابن أبي الدنيا ت العساسلة",
+    "محاسبة النفس لابن أبي الدنيا",
+    "فضل قيام الليل والتهجد للآجري",
+    "مقتل علي لابن أبي الدنيا",
+    "مجابو الدعوة لابن أبي الدنيا",
+    "الإخوان لابن أبي الدنيا",
+    "الأدب المفرد - ت عبد الباقي",
+    "الإشراف في منازل الأشراف لابن أبي الدنيا",
+    "الاعتبار وأعقاب السرور لابن أبي الدنيا",
+    "الأولياء لابن أبي الدنيا",
+    "التواضع والخمول لابن أبي الدنيا",
+    "التوحيد لابن خزيمة",
+    "الحلم لابن أبي الدنيا",
+    "الرد على الجهمية لابن منده - ط المكتبة الأثرية",
+    "الرضا عن الله بقضائه لابن أبي الدنيا",
+    "السنن المأثورة للشافعي",
+    "الشريعة للآجري",
+    "الشكر لابن أبي الدنيا",
+    "الصمت وآداب اللسان",
+    "العمر والشيب لابن أبي الدنيا",
+    "الغرباء للآجري",
+    "المتمنين لابن أبي الدنيا",
+    "المحتضرين لابن أبي الدنيا",
+    "المرض والكفارات لابن أبي الدنيا",
+    "المنامات لابن أبي الدنيا",
+    "النفقة على العيال لابن أبي الدنيا",
+    "الهم والحزن لابن أبي الدنيا",
+    "الوجل والتوثق بالعمل لابن أبي الدنيا",
+    "الورع لابن أبي الدنيا",
+    "حسن الظن بالله لابن أبي الدنيا",
+    "ذم المسكر لابن أبي الدنيا",
+    "صفة النار لابن أبي الدنيا",
+    "فضائل الصحابة لأحمد بن حنبل",
+    "قضاء الحوائج لابن أبي الدنيا",
+    "مداراة الناس لابن أبي الدنيا",
+    "مكارم الأخلاق لابن أبي الدنيا",
+    "من عاش بعد الموت لابن أبي الدنيا",
+    "إصلاح المال",
+    "الجامع لعلوم الإمام أحمد - علوم الحديث",
+    "الجامع لعلوم الإمام أحمد - شرح الأحاديث والآثار",
+    "الجامع لعلوم الإمام أحمد - علل الحديث",
+    "الجامع لعلوم الإمام أحمد - العقيدة",
+    "الجامع لعلوم الإمام أحمد - الرجال",
+    "الجامع لعلوم الإمام أحمد - الأدب والزهد",
+    "مسند الشافعي - ترتيب السندي",
+    "ذم الدنيا",
+    "القناعة والتعفف",
+    "مسند أحمد - ط الرسالة",
+    "سؤالات الاثرم لأحمد بن حنبل",
+    "حديث سفيان بن عيينة رواية المروزي",
+    "العزلة والانفراد",
+    "من حديث سفيان الثوري - ت عامر صبري",
+    "حلم معاوية لابن أبي الدنيا",
+    "الهواتف = هواتف الجنان لابن أبي الدنيا",
+    "مسند الدارمي - ت الزهراني",
+    "مسند أحمد - ت شاكر - ط دار الحديث",
+    "كتاب العلل الواقع بآخر جامع الترمذي - ت بشار",
+    "القراءة عند القبور - من «الجامع» للخلال",
+]
+
+CATEGORIES_NAMES = [
+    "العقيدة",
+    "كتب السنة",
+    "العلل والسؤلات الحديثية",
+    "التراجم والطبقات",
+    "الفقه الحنبلي",
+    "الرقائق والآداب والأذكار",
+    "علوم الحديث",
+    "شروح الحديث",
+]
+
 
 def get_books_hadith() -> list:
     """List all hadith books (static).
 
     Hardcoded slugs — no database I/O, instant.
 
+    Use when you need to filter data by hadith book.
     Returns:
         ['abudawud', 'bukhari', 'dehlawi', 'ibnmajah', 'malik',
          'nasai', 'nawawi', 'qudsi', 'tirmidhi'] (a fresh copy).
@@ -801,6 +984,8 @@ def get_books_tafsir() -> list:
 
     Hardcoded slugs — no database I/O, instant.
 
+    Use when you need to filter data by tafsir book.
+
     Returns:
         ['saadi', 'katheer', 'moyassar', 'tabary', 'baghawy'] (a fresh copy).
     """
@@ -812,7 +997,35 @@ def get_books_books() -> list:
 
     Hardcoded titles — no database I/O, instant. ~260 titles as provided.
 
+    Use when you need to filter data by book name.
+
     Returns:
         Fresh copy of BOOKS_LIST (e.g. 'منهاج السنة النبوية', ...).
     """
     return list(BOOKS_LIST)
+
+
+def get_books_sunnah() -> list:
+    """List all Arabic book titles (static).
+
+    Hardcoded titles — no database I/O, instant. ~260 titles as provided.
+
+    Use when you need to filter data by sunnah books names.
+
+    Returns:
+        Fresh copy of BOOKS_LIST (e.g. 'منهاج السنة النبوية', ...).
+    """
+    return list(SUNNAH_BOOKS)
+
+
+def get_books_categories() -> list:
+    """List all books and sunnah books categories (static).
+
+    Hardcoded titles — no database I/O, instant. ~8 categories as provided.
+
+    Use when you need to filter data by categories.
+
+    Returns:
+        Fresh copy of CATEGORIES_NAMES (e.g. 'العقيدة', ...).
+    """
+    return list(CATEGORIES_NAMES)

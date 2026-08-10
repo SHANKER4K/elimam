@@ -30,6 +30,11 @@ from pydantic_ai.capabilities import Capability
 from pydantic_ai.capabilities.hooks import Hooks
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai_harness.compaction import (
+    ClearToolResults,
+    SummarizingCompaction,
+    ReportContextUsage,
+)
 
 from search import (
     get_quran,
@@ -56,37 +61,18 @@ provider = OpenAIProvider(
 )
 model = OpenAIChatModel("deepseek-v4-flash-free", provider=provider)
 
-system_prompt = """
-You are a Salafi Sunni Islamic scholar assistant. You answer Islamic questions using the provided retrieval tools — Quran, hadith, tafsir, and aqeedah books.
+system_prompt = ""
 
-Core principles:
-- The Salaf (first three generations) are the authoritative reference for understanding Islam.
-- You follow their aqeedah and defend it against opposing views.
-- You always respond in Arabic unless asked otherwise.
-- Never fabricate quotes or knowledge. Use the tools to retrieve verified texts.
-- Every claim must have a citation from the tool results.
-"""
-
-
-def load_skill(path: Path) -> Capability | None:
-    parts = path.read_text().split("---", 2)
-    if len(parts) < 3:
-        return None
-    _, header, body = parts
-    meta = yaml.safe_load(header)
-    if not meta or "description" not in meta:
-        return None
-    return Capability(
-        id=meta["id"],
-        description=meta["description"],
-        instructions=body.strip(),
-    )
-
-
-skills_dir = Path("skills")
-skills = [s for p in skills_dir.glob("*.md") if (s := load_skill(p)) is not None]
+with open("./skills/turath-index-skill.md") as file:
+    system_prompt = file.read()
 
 hooks = Hooks()
+
+compact_tools = ClearToolResults(max_tokens=70_000)
+compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)
+context_report = ReportContextUsage(
+    on_usage=lambda usage: print(f"{usage.fraction:.0%}")
+)
 
 
 @hooks.on.before_tool_execute
@@ -95,12 +81,19 @@ async def log_tool_call(ctx, *, call, tool_def, args):
     return args
 
 
+@hooks.on.before_model_request
+async def log_compaction(ctx, request_context):
+    before = len(request_context.messages)
+    print(f"📨 {before} messages entering model")
+    return request_context
+
+
 agent = Agent(
     model,
     name="islamic_scholar_agent",
     model_settings={"thinking": "high"},
     system_prompt=system_prompt,
-    capabilities=[*skills, hooks],
+    capabilities=[hooks, compact_tools, compact_summary, context_report],
     tools=[
         get_quran,
         get_hadith,
@@ -222,3 +215,36 @@ async def chat_stream(req: ChatRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/dense_search")
+def dense_search_(
+    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
+) -> list:
+    return dense_search(collection, query_text, top_k, filters)
+
+
+@app.post("/sparse_search")
+def sparse_search_(
+    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
+) -> list:
+    return sparse_search(collection, query_text, top_k, filters)
+
+
+@app.post("/hybrid_search")
+def hybrid_search_(
+    collection: str,
+    query_text: str,
+    top_k: int = 10,
+    pool: int = 50,
+    filters: dict | None = None,
+) -> list:
+    return hybrid_search(collection, query_text, top_k, pool, filters)
+
+
+# @app.post('/compact')
+# def compact(session_id:str):
+#     if not messages['session_id']:
+#         return {"status":'failed','message':'The chat is empty'}
+#
+#     await compac
