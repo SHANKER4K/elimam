@@ -1,0 +1,210 @@
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+
+
+class BackendError(RuntimeError):
+    pass
+
+
+class BackendClient:
+    """Thin HTTP client. The bot never touches the database directly - every
+    operation goes through the backend, per the architecture rule that the
+    bot is a transport/interface layer only."""
+
+    def __init__(self, base_url: str, bot_shared_secret: str, timeout: float = 60.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.bot_shared_secret = bot_shared_secret
+        self.timeout = timeout
+
+    def _identity_headers(
+        self,
+        telegram_id: str,
+        username: str | None = None,
+        display_name: str | None = None,
+    ) -> dict[str, str]:
+        if not self.bot_shared_secret:
+            raise BackendError("BOT_SHARED_SECRET is not configured")
+
+        return {
+            "X-Bot-Secret": self.bot_shared_secret,
+            "X-Telegram-Id": str(telegram_id),
+        }
+
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.request(
+                    method, f"{self.base_url}{path}", json=json_body, headers=headers
+                )
+                response.raise_for_status()
+                if response.status_code == 204 or not response.content:
+                    return None
+                return response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise BackendError(f"Backend returned {exc.response.status_code}: {body}") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise BackendError("Could not communicate with the backend") from exc
+
+    async def find_user(self, telegram_id: str, path_template: str) -> dict[str, Any] | None:
+        path = path_template.format(telegram_id=telegram_id)
+        try:
+            return await self._request_json("GET", path)
+        except BackendError as exc:
+            if " 404:" in str(exc):
+                return None
+            raise
+
+    async def create_user(
+        self, *, path: str, username: str, display_name: str, telegram_id: str
+    ) -> dict[str, Any]:
+        return await self._request_json(
+            "POST",
+            path,
+            json_body={
+                "username": username,
+                "display_name": display_name,
+                "telegram_id": telegram_id,
+            },
+        )
+
+    async def get_active_session(
+        self, *, path_template: str, user_id: str
+    ) -> dict[str, Any] | None:
+        path = path_template.format(user_id=user_id)
+        try:
+            return await self._request_json("GET", path)
+        except BackendError as exc:
+            if " 404:" in str(exc):
+                return None
+            raise
+
+    async def create_session(
+        self,
+        *,
+        path: str,
+        user_id: str,
+        model_provider: str,
+        model_name: str,
+        model_variant: str,
+    ) -> dict[str, Any]:
+        return await self._request_json(
+            "POST",
+            path,
+            json_body={
+                "user_id": user_id,
+                "source": "telegram",
+                "model_provider": model_provider,
+                "model_name": model_name,
+                "model_variant": model_variant,
+            },
+        )
+
+    async def update_session_model(
+        self,
+        *,
+        path_template: str,
+        session_id: str,
+        model_provider: str,
+        model_name: str,
+        model_variant: str,
+    ) -> dict[str, Any]:
+        path = path_template.format(session_id=session_id)
+        return await self._request_json(
+            "PUT",
+            path,
+            json_body={
+                "model_provider": model_provider,
+                "model_name": model_name,
+                "model_variant": model_variant,
+            },
+        )
+
+    async def reset_session(self, *, path_template: str, user_id: str) -> dict[str, Any]:
+        path = path_template.format(user_id=user_id)
+        return await self._request_json("POST", path)
+
+    async def key_exists(self, *, path_template: str, user_id: str, provider: str) -> bool:
+        path = path_template.format(user_id=user_id, provider=provider)
+        result = await self._request_json("GET", path)
+        return bool(result and result.get("has_key"))
+
+    async def store_key(self, *, path: str, user_id: str, provider: str, api_key: str) -> None:
+        await self._request_json(
+            "POST",
+            path,
+            json_body={"user_id": user_id, "provider": provider, "api_key": api_key},
+        )
+
+    async def stream_chat(
+        self,
+        *,
+        path: str,
+        message: str,
+        telegram_id: str,
+        username: str | None,
+        display_name: str | None,
+    ) -> AsyncIterator[str]:
+        prompt = (
+            "You are in Telegram, so ignore the printing formats of Quran and hadith. "
+            "Use block quotes for Quran and hadith instead.\n\n"
+            f"{message}"
+        )
+        headers = self._identity_headers(telegram_id, username, display_name)
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}{path}",
+                    json={"message": prompt},
+                    headers=headers,
+                ) as response:
+                    response.raise_for_status()
+
+                    event: str | None = None
+                    async for line in response.aiter_lines():
+                        if line.startswith("event: "):
+                            event = line[7:]
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+
+                        raw = line[6:]
+                        try:
+                            payload = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if event in {"tool", "tool_result"}:
+                            continue
+                        if event == "error":
+                            raise BackendError(payload.get("message", "backend error"))
+                        if event == "text_delta":
+                            text = payload.get("text")
+                            if text:
+                                yield text
+                        elif event in {"done", "message_end"}:
+                            if event == "done":
+                                break
+                        elif event is None:
+                            text = payload.get("text")
+                            if text:
+                                yield text
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise BackendError(f"Backend returned {exc.response.status_code}: {body}") from exc
+        except httpx.HTTPError as exc:
+            raise BackendError("Could not connect to the backend") from exc

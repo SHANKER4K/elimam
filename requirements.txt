@@ -1,0 +1,10 @@
+camel-tools
+qdrant_client
+pydantic
+pydantic-ai
+pydantic-ai_harness
+fastapi
+fastembed
+sentence_transformers
+uvicorn
+psycopg2-binary

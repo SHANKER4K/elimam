@@ -5,8 +5,12 @@ from qdrant_client import QdrantClient, models
 from sentence_transformers import SentenceTransformer
 from camel_tools.utils.dediac import dediac_ar
 from camel_tools.utils.normalize import normalize_alef_ar
+from dotenv import load_dotenv
+import os
 
-QDRANT_URL = "http://localhost:6333"
+load_dotenv()
+
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 
 print("Loading Model")
 model = SentenceTransformer(

@@ -1,0 +1,18 @@
+[project]
+name = "elimam-telebot"
+version = "0.1.0"
+description = "Telegram bot adapter for the Elimam FastAPI backend"
+requires-python = ">=3.12"
+dependencies = [
+  "aiogram>=3.22,<4",
+  "httpx>=0.27,<1",
+  "python-dotenv>=1.0,<2",
+  "aiosqlite>=0.20,<1",
+  "telegramify-markdown>=0.5,<1",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

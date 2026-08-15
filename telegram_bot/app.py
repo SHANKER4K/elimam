@@ -1,24 +1,18 @@
 import json
 import os
 from collections.abc import AsyncIterator
-from telegram import MessageEntity, Update
-from telegram.constants import ChatAction
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+
+import httpx
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command
+from aiogram.types import Message, MessageEntity
+from aiogram.enums import ChatAction
+from aiogram.utils.chat_action import ChatActionSender
 from telegramify_markdown import telegramify
 from telegramify_markdown.content import ContentType
 
+from dotenv import load_dotenv
 
-import httpx
-
-from dotenv import load_dotenv  # Run `pip install python-dotenv` first
-
-# Load variables from a .env file into os.environ
 load_dotenv()
 
 
@@ -30,7 +24,7 @@ async def stream_chat(
     client: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[str]:
     """Stream the agent's reply from the server's /chat SSE endpoint."""
-    base_url = base_url or os.environ.get("ISLAM_SERVER_URL", "http://localhost:8000")
+    base_url = base_url or os.environ.get("BACKEND_URL", "http://localhost:8000")
     own_client = client is None
     client = client or httpx.AsyncClient(timeout=60.0)
     message = f"You are in Telegram so ignore the printing formats of quran and hadith use them in block quotes instead \n{message}"
@@ -62,62 +56,61 @@ def session_id(chat_id: int) -> str:
     return f"{chat_id}:{sessions.get(chat_id, 0)}"
 
 
-async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.message.text:
+async def handle_text(message: Message, bot: Bot) -> None:
+    if not message.text:
         return
-    chat_id = update.message.chat_id
-    await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    try:
-        text = "".join(
-            [
+    chat_id = message.chat.id
+    async with ChatActionSender(bot=bot, chat_id=chat_id):
+        try:
+            text = "".join(
                 chunk
-                async for chunk in stream_chat(update.message.text, session_id(chat_id))
-            ]
-        )
-        results = await telegramify(text, max_message_length=4090)
-    except Exception:
-        await update.message.reply_text("حدث خطأ في الاتصال بالخادم، حاول مرة أخرى.")
-        return
+                async for chunk in stream_chat(message.text, session_id(chat_id))
+            )
+            results = await telegramify(text, max_message_length=4090)
+        except Exception:
+            await message.answer("حدث خطأ في الاتصال بالخادم، حاول مرة أخرى.")
+            return
     if not text or not results:
-        await update.message.reply_text("لم أستطع توليد رد.")
+        await message.answer("لم أستطع توليد رد.")
         return
     for item in results:
         if item.content_type == ContentType.TEXT:
             entities = [MessageEntity(**e.to_dict()) for e in item.entities]
-            await update.message.reply_text(item.text, entities=entities or None)
+            await message.answer(item.text, entities=entities or None)
         elif item.content_type == ContentType.FILE:
-            await update.message.reply_document(
+            await message.answer_document(
                 document=item.file_data,
                 filename=item.file_name,
                 caption=item.caption_text or None,
             )
         elif item.content_type == ContentType.PHOTO:
-            await update.message.reply_photo(
+            await message.answer_photo(
                 photo=item.file_data,
                 caption=item.caption_text or None,
             )
 
 
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
+async def cmd_start(message: Message) -> None:
+    await message.answer(
         "السلام عليكم، أنا مساعدك في الأسئلة الإسلامية.\n"
         "اسألني عن القرآن والحديث والتفسير والعقيدة، وسأجيب مع ذكر المصادر.\n"
         "استخدم /reset لبدء محادثة جديدة."
     )
 
 
-async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.message.chat_id
+async def cmd_reset(message: Message) -> None:
+    chat_id = message.chat.id
     sessions[chat_id] = sessions.get(chat_id, 0) + 1
-    await update.message.reply_text("تم تصفير المحادثة، ابدأ سؤالاً جديداً.")
+    await message.answer("تم تصفير المحادثة، ابدأ سؤالاً جديداً.")
 
 
 def main() -> None:
-    app = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("reset", cmd_reset))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.run_polling()
+    bot = Bot(token=os.environ["TELEGRAM_BOT_TOKEN"])
+    dp = Dispatcher()
+    dp.message.register(cmd_start, Command("start"))
+    dp.message.register(cmd_reset, Command("reset"))
+    dp.message.register(handle_text, F.text)
+    dp.run_polling(bot)
 
 
 if __name__ == "__main__":

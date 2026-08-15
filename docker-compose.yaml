@@ -2,7 +2,6 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant
-
     restart: unless-stopped
 
     ports:
@@ -13,7 +12,113 @@ services:
       - ./qdrant_storage:/qdrant/storage
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      # qdrant image has no curl/wget; bash /dev/tcp does the job
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333"]
       interval: 30s
       timeout: 10s
       retries: 5
+
+  db:
+    image: postgres:16
+    container_name: db
+    restart: unless-stopped
+
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-shk123}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Base schema, applied on first boot of an empty volume.
+      - ./db/drizzle/0000_abandoned_slipstream.sql:/docker-entrypoint-initdb.d/001_conversations.sql:ro
+      # Users/api_keys/sessions refactor migration - also only runs
+      # automatically against a FRESH volume. If reusing an existing
+      # pgdata volume, apply it manually (see README).
+      - ./db/drizzle/0001_users_apikeys_sessions.sql:/docker-entrypoint-initdb.d/002_users_apikeys_sessions.sql:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: elimam:latest
+    container_name: backend
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      # LLM provider
+      - API_KEY=${API_KEY}
+      - MODEL=${MODEL:-deepseek-v4-flash-free}
+      - MODEL_PROVIDER=${MODEL_PROVIDER:-opencode}
+      - MODEL_PROVIDER_URL=${MODEL_PROVIDER_URL:-https://opencode.ai/zen/v1}
+      - MODEL_VARIANT=${MODEL_VARIANT:-low}
+
+      # Vector search
+      - QDRANT_URL=http://qdrant:6333
+
+      # Database
+      - DATABASE_HOST=db
+      - DATABASE_USER=${POSTGRES_USER:-postgres}
+      - DATABASE_NAME=${POSTGRES_DB:-postgres}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-shk123}
+      - DATABASE_PORT=5432
+
+      # Security - shared secret must match the telegram service below.
+      - BOT_SHARED_SECRET=${BOT_SHARED_SECRET}
+      # Fernet key for encrypting api_keys.encrypted_key at rest.
+      - API_KEY_ENCRYPTION_KEY=${API_KEY_ENCRYPTION_KEY}
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/chat/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  telegram:
+    build: ./elimam_telebot/
+    image: elimam_telegram_bot:latest
+    container_name: elimam_bot
+    restart: unless-stopped
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Must be identical to backend's BOT_SHARED_SECRET.
+      - BOT_SHARED_SECRET=${BOT_SHARED_SECRET}
+      # Container-to-container: use the Compose service name, not localhost.
+      - BACKEND_URL=http://backend:8000
+      - BACKEND_CHAT_PATH=/chat
+      - BACKEND_USER_LOOKUP_PATH=/users/telegram/{telegram_id}
+      - BACKEND_USER_CREATE_PATH=/users/add
+      - BACKEND_ACTIVE_SESSION_PATH=/sessions/active/user/{user_id}
+      - BACKEND_SESSION_CREATE_PATH=/sessions/add
+      - BACKEND_SESSION_MODEL_UPDATE_PATH=/sessions/{session_id}/model
+      - BACKEND_SESSION_RESET_PATH=/sessions/reset/{user_id}
+      - BACKEND_KEY_EXISTS_PATH=/keys/{user_id}/{provider}/exists
+      - BACKEND_KEY_ADD_PATH=/keys/add
+
+volumes:
+  pgdata:
+

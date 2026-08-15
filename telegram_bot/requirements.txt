@@ -1,0 +1,5 @@
+pytelegrambotapi
+python-telegram-bot
+telebot
+telegramify-markdown
+dotenv
