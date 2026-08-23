@@ -1,5 +1,0 @@
-aiogram>=3.22,<4
-aiohttp>=3.10
-httpx>=0.27
-python-dotenv>=1.0
-telegramify-markdown>=0.5

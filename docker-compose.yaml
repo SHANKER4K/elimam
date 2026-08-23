@@ -50,7 +50,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: elimam:latest
+    image: elimam:v2
     container_name: backend
     restart: unless-stopped
 
@@ -64,15 +64,11 @@ services:
       - "8000:8000"
 
     environment:
-      # LLM provider
-      - API_KEY=${API_KEY}
-      - MODEL=${MODEL:-deepseek-v4-flash-free}
-      - MODEL_PROVIDER=${MODEL_PROVIDER:-opencode}
-      - MODEL_PROVIDER_URL=${MODEL_PROVIDER_URL:-https://opencode.ai/zen/v1}
-      - MODEL_VARIANT=${MODEL_VARIANT:-low}
-
+      # Provider config path (shared YAML, mounted below)
+      - PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
       # Vector search
       - QDRANT_URL=http://qdrant:6333
+      - ENCRYPTION_MASTER_KEY=J8ZvAsmsSCiEg_U25hylZQo7IVTyyAzGfXZY-DjQQ0U=
 
       # Database
       - DATABASE_HOST=db
@@ -86,6 +82,10 @@ services:
       # Fernet key for encrypting api_keys.encrypted_key at rest.
       - API_KEY_ENCRYPTION_KEY=${API_KEY_ENCRYPTION_KEY}
 
+    volumes:
+      - ./config/providers.yaml:/app/config/providers.yaml:ro
+      - ./skills/turath-index-skill.md:/app/skills/turath-index-skill
+
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/chat/health')"]
       interval: 15s
@@ -94,8 +94,8 @@ services:
       start_period: 10s
 
   telegram:
-    build: ./elimam_telebot/
-    image: elimam_telegram_bot:latest
+    build: ./telegram_bot/
+    image: elimam_bot:latest
     container_name: elimam_bot
     restart: unless-stopped
 
@@ -110,6 +110,7 @@ services:
       # Container-to-container: use the Compose service name, not localhost.
       - BACKEND_URL=http://backend:8000
       - BACKEND_CHAT_PATH=/chat
+      - BACKEND_PROVIDERS_PATH=/providers
       - BACKEND_USER_LOOKUP_PATH=/users/telegram/{telegram_id}
       - BACKEND_USER_CREATE_PATH=/users/add
       - BACKEND_ACTIVE_SESSION_PATH=/sessions/active/user/{user_id}

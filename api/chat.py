@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 from fastapi import APIRouter, Header, HTTPException
@@ -17,7 +18,7 @@ from pydantic_ai import (
 )
 from pydantic_ai.messages import TextPart, TextPartDelta, ModelMessagesTypeAdapter
 from pydantic_ai.capabilities.hooks import Hooks
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
@@ -26,6 +27,8 @@ from pydantic_ai_harness.compaction import (
 )
 
 from db.connection import get_conn
+
+logger = logging.getLogger("api.chat")
 from search import (
     get_quran,
     get_hadith,
@@ -42,6 +45,7 @@ from search import (
 )
 from api.users import get_or_create_user_by_telegram_id
 from api.keys import get_decrypted_key
+from api.providers import resolve_model_config
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -55,6 +59,16 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # body entirely, per rules #4/#5.
 # ---------------------------------------------------------------------------
 BOT_SHARED_SECRET = os.environ.get("BOT_SHARED_SECRET", "")
+
+
+class WebChatRequest(BaseModel):
+    message: str
+    model_name: str
+    model_provider: str
+    model_variant: str
+    session_id: str
+    api_key: str
+    web: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -115,32 +129,9 @@ def get_active_session_row(user_id: str) -> dict | None:
     }
 
 
-def create_active_session(user_id: str, source: str = "telegram") -> dict:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO sessions (user_id, source, pydantic_message, is_active)
-                VALUES (%s, %s, %s, true)
-                RETURNING id, model_provider, model_name, model_variant
-                """,
-                (user_id, source, json.dumps([])),
-            )
-            row = cur.fetchone()
-    conn.commit()
-    return {
-        "id": str(row[0]),
-        "model_provider": row[1],
-        "model_name": row[2],
-        "model_variant": row[3],
-    }
-
-
 def resolve_telegram_caller(
     x_bot_secret: str | None,
     x_telegram_id: str | None,
-    x_telegram_username: str | None,
-    x_telegram_display_name: str | None,
 ) -> str:
     """authenticated Telegram user -> users.id, per the spec's resolution
     chain. Only the bot (which knows BOT_SHARED_SECRET) may set the
@@ -152,8 +143,8 @@ def resolve_telegram_caller(
 
     user = get_or_create_user_by_telegram_id(
         telegram_id=x_telegram_id,
-        username=x_telegram_username,
-        display_name=x_telegram_display_name,
+        username=None,
+        display_name=None,
     )
     return user["id"]
 
@@ -165,20 +156,25 @@ async def stream(
     api_key: str,
     model_name: str,
     variant: str,
+    web: bool,
 ):
+    global sessions
     provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
     model = OpenAIChatModel(model_name, provider=provider)
+    model_settings = OpenAIResponsesModelSettings(
+        temperature=0.5, service_tier="flex", thinking=str(variant)
+    )
 
     agent = Agent(
         model,
         name="islamic_scholar_agent",
-        model_settings={"thinking": str(variant)},
+        model_settings=model_settings,
         system_prompt=system_prompt,
         capabilities=capabilities,
         tools=tools,
     )
 
-    history = load_session(session_id)
+    history = load_session(session_id) if not web else sessions.get(session_id, [])
     async with agent.run_stream_events(prompt, message_history=history) as events:
         async for event in events:
             match event:
@@ -188,20 +184,31 @@ async def stream(
                     )
                 case PartDeltaEvent(delta=TextPartDelta() as delta):
                     yield sse("text_delta", {"text": delta.content_delta})
+
                 case FunctionToolCallEvent(part=ToolCallPart() as part):
                     yield sse(
                         "tool",
-                        {"text": part.tool_name, "tool_call_id": part.tool_call_id},
+                        {
+                            "text": part.tool_name,  # tool name
+                            "tool_call_id": part.tool_call_id,  # id to match results
+                            "args": part.args_as_dict(),  # the parsed arguments (dict)
+                        },
                     )
+
                 case FunctionToolResultEvent(part=ToolReturnPart() as part):
                     yield sse(
                         "tool_result",
                         {"text": part.content, "tool_call_id": part.tool_call_id},
                     )
+
                 case PartEndEvent(part=TextPart()):
                     yield sse("message_end", {})
+
                 case AgentRunResultEvent(result=result):
-                    save_session_messages(session_id, result.all_messages())
+                    if not web:
+                        save_session_messages(session_id, result.all_messages())
+                    else:
+                        sessions[session_id] = result.all_messages()
                     yield sse("done", {"output": result.output})
 
 
@@ -214,7 +221,9 @@ with open("./skills/turath-index-skill.md") as file:
 compact_tools = ClearToolResults(max_tokens=70_000)
 compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)
 context_report = ReportContextUsage(
-    on_usage=lambda usage: print(f"{usage.fraction:.0%}")
+    on_usage=lambda usage: logger.info(
+        "context_usage", extra={"fraction": round(usage.fraction * 100)}
+    )
 )
 
 hooks = Hooks()
@@ -236,31 +245,18 @@ tools = [
 
 @hooks.on.before_tool_execute
 async def log_tool_call(ctx, *, call, tool_def, args):
-    print(f"🔧 Calling {call.tool_name}({args})")
+    logger.info(
+        "tool_call",
+        extra={"tool": call.tool_name, "tool_call_id": call.tool_call_id},
+    )
     return args
 
 
 @hooks.on.before_model_request
 async def log_compaction(ctx, request_context):
     before = len(request_context.messages)
-    print(f"📨 {before} messages entering model")
+    logger.debug("messages_entering_model", extra={"n_messages": before})
     return request_context
-
-
-# Fallback config from env, used only if a session has no provider/model set
-# (should not normally happen once /start always creates a full session).
-DEFAULT_MODEL_NAME = os.environ.get("MODEL", "deepseek-v4-flash-free")
-DEFAULT_MODEL_PROVIDER = os.environ.get("MODEL_PROVIDER", "opencode")
-DEFAULT_PROVIDER_URL = os.environ.get(
-    "MODEL_PROVIDER_URL", "https://opencode.ai/zen/v1"
-)
-DEFAULT_VARIANT = os.environ.get("MODEL_VARIANT", "low")
-DEFAULT_API_KEY = os.environ.get("API_KEY", "")
-
-# provider -> base_url. Extend as PROVIDERS grows; kept out of the bot.
-PROVIDER_BASE_URLS: dict[str, str] = {
-    DEFAULT_MODEL_PROVIDER: DEFAULT_PROVIDER_URL,
-}
 
 
 @router.post("")
@@ -268,49 +264,98 @@ async def chat_stream(
     req: ChatRequest,
     x_bot_secret: str | None = Header(default=None, alias="X-Bot-Secret"),
     x_telegram_id: str | None = Header(default=None, alias="X-Telegram-Id"),
-    x_telegram_username: str | None = Header(default=None, alias="X-Telegram-Username"),
-    x_telegram_display_name: str | None = Header(
-        default=None, alias="X-Telegram-Display-Name"
-    ),
 ):
-    user_id = resolve_telegram_caller(
-        x_bot_secret, x_telegram_id, x_telegram_username, x_telegram_display_name
-    )
+    user_id = resolve_telegram_caller(x_bot_secret, x_telegram_id)
 
     session = get_active_session_row(user_id)
     if session is None:
-        # Should not normally happen (/start always creates one), but keep
-        # the endpoint self-healing rather than erroring the user out.
-        session = create_active_session(user_id)
+        raise HTTPException(
+            status_code=409,
+            detail="User has no active session",
+        )
 
-    model_provider = session["model_provider"] or DEFAULT_MODEL_PROVIDER
-    model_name = session["model_name"] or DEFAULT_MODEL_NAME
-    model_variant = session["model_variant"] or DEFAULT_VARIANT
+    model_provider = session["model_provider"]
+    model_name = session["model_name"]
+    model_variant = session["model_variant"]
 
-    api_key = get_decrypted_key(user_id, model_provider) or DEFAULT_API_KEY
+    if not model_provider or not model_name or not model_variant:
+        raise HTTPException(
+            status_code=409,
+            detail="Active session is missing model configuration",
+        )
+
+    try:
+        model_config = resolve_model_config(
+            provider=model_provider,
+            model=model_name,
+            variant=model_variant,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    api_key = get_decrypted_key(user_id, model_provider)
     if not api_key:
         raise HTTPException(
             status_code=400, detail="No API key on file for this provider"
         )
 
-    provider_url = PROVIDER_BASE_URLS.get(model_provider, DEFAULT_PROVIDER_URL)
-
     return StreamingResponse(
         stream(
             req.message,
             session_id=session["id"],
-            provider_url=provider_url,
+            provider_url=model_config["url"],
             api_key=api_key,
-            model_name=model_name,
-            variant=model_variant,
+            model_name=model_config["model"],
+            variant=model_config["variant"],
+            web=False,
         ),
         media_type="text/event-stream",
     )
 
 
-@router.get("/health")
-async def health():
-    return {"status": "ok"}
+sessions = {}
+
+
+@router.post("/web")
+async def chat_web_stream(req: WebChatRequest):
+
+    model_provider = req.model_provider
+    model_name = req.model_name
+    model_variant = req.model_variant
+
+    if not model_provider or not model_name or not model_variant:
+        raise HTTPException(
+            status_code=409,
+            detail="Active session is missing model configuration",
+        )
+
+    try:
+        model_config = resolve_model_config(
+            provider=model_provider,
+            model=model_name,
+            variant=model_variant,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    api_key = req.api_key
+    if not api_key:
+        raise HTTPException(
+            status_code=400, detail="No API key on file for this provider"
+        )
+
+    return StreamingResponse(
+        stream(
+            req.message,
+            session_id=req.session_id,
+            provider_url=model_config["url"],
+            api_key=api_key,
+            model_name=model_config["model"],
+            variant=model_config["variant"],
+            web=req.web,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.post("/dense_search")
@@ -336,3 +381,20 @@ def hybrid_search_(
     filters: dict | None = None,
 ) -> list:
     return hybrid_search(collection, query_text, top_k, pool, filters)
+
+
+@router.post("/hybrid_search_weighted")
+def hybrid_search_weighted_(
+    collection: str,
+    query_text: str,
+    top_k: int = 10,
+    pool: int = 50,
+    weights: tuple[float, float] = (0.7, 0.3),
+    filters: dict | None = None,
+) -> list:
+    return hybrid_search_weighted(collection, query_text, top_k, pool, weights, filters)
+
+
+@router.get("/health")
+async def health():
+    return {"status": "ok"}

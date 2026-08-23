@@ -7,27 +7,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Fill this with the providers/models/variants you want to expose to
-# Telegram. Structure: provider -> models -> variants.
-# Example:
-# PROVIDERS = {
-#     "openai": {
-#         "models": {
-#             "gpt-5": {"variants": ["low", "high", "max"]},
-#             "gpt-5-mini": {"variants": ["low", "high"]},
-#         }
-#     },
-# }
-PROVIDERS: dict[str, dict] = {
-    "opencode": {
-        "models": {
-            "deepseek-v4-flash-free": {"variants": ["low", "high", "max"]},
-            "big-pickle": {"variants": ["low", "high", "max"]},
-            "mimo-v2.5-free": {"variants": ["low", "high", "max"]},
-        }
-    },
-}
-
 DEFAULT_VARIANTS = ("low", "high", "max")
 
 
@@ -45,6 +24,7 @@ class Settings:
     session_reset_path: str = "/sessions/reset/{user_id}"
     key_exists_path: str = "/keys/{user_id}/{provider}/exists"
     key_add_path: str = "/keys/add"
+    providers_path: str = "/providers"
     request_timeout: float = 60.0
 
     @classmethod
@@ -76,5 +56,6 @@ class Settings:
                 "BACKEND_KEY_EXISTS_PATH", "/keys/{user_id}/{provider}/exists"
             ),
             key_add_path=os.getenv("BACKEND_KEY_ADD_PATH", "/keys/add"),
+            providers_path=os.getenv("BACKEND_PROVIDERS_PATH", "/providers"),
             request_timeout=float(os.getenv("BACKEND_TIMEOUT", "60")),
         )

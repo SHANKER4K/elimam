@@ -4,7 +4,9 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
+from aiogram.types.message import Message
 import httpx
+from telegramify_markdown import markdownify
 
 
 class BackendError(RuntimeError):
@@ -20,6 +22,11 @@ class BackendClient:
         self.base_url = base_url.rstrip("/")
         self.bot_shared_secret = bot_shared_secret
         self.timeout = timeout
+
+    def _bot_headers(self) -> dict[str, str]:
+        if not self.bot_shared_secret:
+            raise BackendError("BOT_SHARED_SECRET is not configured")
+        return {"X-Bot-Secret": self.bot_shared_secret}
 
     def _identity_headers(
         self,
@@ -57,6 +64,15 @@ class BackendClient:
             raise BackendError(f"Backend returned {exc.response.status_code}: {body}") from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise BackendError("Could not communicate with the backend") from exc
+
+    async def fetch_providers(self, path: str) -> dict[str, Any]:
+        """Return provider names mapped to their models & variants.
+        Example return shape: {'opencode': {'models': {...}}, 'dahl': {'models': {...}}}."""
+        result = await self._request_json("GET", path, headers=self._bot_headers())
+        providers = result.get("providers") if isinstance(result, dict) else None
+        if not isinstance(providers, dict):
+            raise BackendError("Invalid provider configuration from backend")
+        return providers
 
     async def find_user(self, telegram_id: str, path_template: str) -> dict[str, Any] | None:
         path = path_template.format(telegram_id=telegram_id)
@@ -152,6 +168,7 @@ class BackendClient:
         self,
         *,
         path: str,
+        sender: Message,
         message: str,
         telegram_id: str,
         username: str | None,
@@ -188,10 +205,21 @@ class BackendClient:
                         except json.JSONDecodeError:
                             continue
 
-                        if event in {"tool", "tool_result"}:
-                            continue
+                        if event in {"tool"}:
+                            text = f"🔎  **{payload.get('text')}**: **{payload.get('args', {}).get('id', '')}**".strip()
+                            mdv2 = markdownify(text)
+
+                            await sender.answer(
+                                mdv2,
+                                parse_mode="MarkdownV2",
+                            )
+
                         if event == "error":
                             raise BackendError(payload.get("message", "backend error"))
+                        if event == "message_start":
+                            text = payload.get("text")
+                            if text:
+                                yield text
                         if event == "text_delta":
                             text = payload.get("text")
                             if text:

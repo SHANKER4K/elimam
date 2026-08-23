@@ -1,0 +1,107 @@
+providers:
+  opencode:
+    url: "https://opencode.ai/zen/v1"
+    models:
+      deepseek-v4-flash-free:
+        variants:
+          - low
+          - high
+          - max
+      big-pickle:
+        variants:
+          - low
+          - high
+          - max
+      mimo-v2.5-free:
+        variants:
+          - low
+          - high
+          - max
+      x-preview-f-free:
+        variants:
+          - low
+          - high
+          - max
+      muse-spark-1.2-contributor-free:
+        variants:
+          - low
+          - high
+          - max
+      hy3-free:
+        variants:
+          - low
+          - high
+          - max
+      nemotron-3-ultra-free:
+        variants:
+          - low
+          - high
+          - max
+      laguna-s-2.1-free:
+        variants:
+          - low
+          - high
+          - max
+
+
+
+
+  dahl:
+    url: "https://inference.dahl.global/v1"
+    models:
+      moonshotai/Kimi-K2.6:
+        variants:
+          - low
+          - high
+          - max
+      deepseek-ai/DeepSeek-V4-Flash-0731:
+        variants:
+          - low
+          - high
+          - max
+      MiniMaxAI/MiniMax-M2.7:
+        variants:
+          - low
+          - high
+          - max
+
+  hermes(nousresearch):
+    url: "https://inference-api.nousresearch.com/v1"
+    models:
+      tencent/hy3:free:
+        variants:
+          - low
+          - high
+          - max
+
+      stepfun/step-3.7-flash:free:
+        variants:
+          - low
+          - high
+          - max
+
+
+      upstage/solar-pro4:free:
+        variants:
+          - low
+          - high
+          - max
+
+      meituan/longcat-2.0:free:
+        variants:
+          - low
+          - high
+          - max
+
+      poolside/laguna-s-2.1:free:
+        variants:
+          - low
+          - high
+          - max
+
+      poolside/laguna-xs-2.1:free:
+        variants:
+          - low
+          - high
+          - max
+

@@ -84,6 +84,7 @@ def _dense_query(text: str) -> list[float]:
 def _sparse_query(text: str) -> models.SparseVector:
     """Embed a query with fastembed BM25. Raw text (no dediac) — matches how sparse
     vectors were indexed in update_qdrant.py."""
+    text = _preprocess(text)
     sv = list(sparse_model.embed([text]))[0]
     return models.SparseVector(indices=sv.indices.tolist(), values=sv.values.tolist())
 
@@ -129,7 +130,7 @@ def _build_filter(collection: str, filters: dict | None) -> models.Filter | None
     Raises ValueError on unknown keys, wrong value types, unknown ops, empty
     lists, bool values, and None values.
     """
-    if not filters:
+    if not filters or filters == {}:
         return None
 
     schema = FILTER_SCHEMA[collection]
@@ -247,19 +248,23 @@ def dense_search(
     """
     if isinstance(filters, str):
         filters = json.loads(filters)
+    try:
+        res = [
+            p.model_dump()
+            for p in client.query_points(
+                collection_name=collection.strip(),
+                query=_dense_query(query_text),
+                using="dense",
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+                query_filter=_build_filter(collection, filters),
+            ).points
+        ]
 
-    return [
-        p.model_dump()
-        for p in client.query_points(
-            collection_name=collection,
-            query=_dense_query(query_text),
-            using="dense",
-            limit=top_k,
-            with_payload=True,
-            with_vectors=False,
-            query_filter=_build_filter(collection, filters),
-        ).points
-    ]
+    except Exception as e:
+        return [e]
+    return res
 
 
 def sparse_search(
@@ -302,19 +307,22 @@ def sparse_search(
     """
     if isinstance(filters, str):
         filters = json.loads(filters)
-
-    return [
-        p.model_dump()
-        for p in client.query_points(
-            collection_name=collection,
-            query=_sparse_query(query_text),
-            using="sparse",
-            limit=top_k,
-            with_payload=True,
-            with_vectors=False,
-            query_filter=_build_filter(collection, filters),
-        ).points
-    ]
+    try:
+        res = [
+            p.model_dump()
+            for p in client.query_points(
+                collection_name=collection.strip(),
+                query=_sparse_query(query_text),
+                using="sparse",
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+                query_filter=_build_filter(collection, filters),
+            ).points
+        ]
+    except Exception as e:
+        return [e]
+    return res
 
 
 def hybrid_search(
@@ -366,26 +374,30 @@ def hybrid_search(
     """
     if isinstance(filters, str):
         filters = json.loads(filters)
-
-    return [
-        p.model_dump()
-        for p in client.query_points(
-            collection_name=collection,
-            prefetch=[
-                models.Prefetch(
-                    query=_dense_query(query_text), using="dense", limit=pool
-                ),
-                models.Prefetch(
-                    query=_sparse_query(query_text), using="sparse", limit=pool
-                ),
-            ],
-            query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=top_k,
-            with_payload=True,
-            with_vectors=False,
-            query_filter=_build_filter(collection, filters),
-        ).points
-    ]
+    query_text = _preprocess(query_text)
+    try:
+        res = [
+            p.model_dump()
+            for p in client.query_points(
+                collection_name=collection.strip(),
+                prefetch=[
+                    models.Prefetch(
+                        query=_dense_query(query_text), using="dense", limit=pool
+                    ),
+                    models.Prefetch(
+                        query=_sparse_query(query_text), using="sparse", limit=pool
+                    ),
+                ],
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+                query_filter=_build_filter(collection, filters),
+            ).points
+        ]
+    except Exception as e:
+        return [e]
+    return res
 
 
 def hybrid_search_weighted(
@@ -440,6 +452,8 @@ def hybrid_search_weighted(
     if isinstance(filters, str):
         filters = json.loads(filters)
 
+    query_text = _preprocess(query_text)
+
     body = {
         "prefetch": [
             {"query": _dense_query(query_text), "using": "dense", "limit": pool},
@@ -454,15 +468,18 @@ def hybrid_search_weighted(
         "with_payload": True,
         "with_vectors": False,
     }
-    query_filter = _build_filter(collection, filters)
-    if query_filter is not None:
-        body["filter"] = query_filter.model_dump()
-    response = httpx.post(
-        f"{QDRANT_URL}/collections/{collection}/points/query",
-        json=body,
-        timeout=30,
-    )
-    response.raise_for_status()
+    try:
+        query_filter = _build_filter(collection.strip(), filters)
+        if query_filter is not None:
+            body["filter"] = query_filter.model_dump()
+        response = httpx.post(
+            f"{QDRANT_URL}/collections/{collection}/points/query",
+            json=body,
+            timeout=30,
+        )
+        response.raise_for_status()
+    except Exception as e:
+        return [e]
     return response.json()["result"]["points"]
 
 

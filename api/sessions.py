@@ -46,7 +46,8 @@ async def get_session(session_id: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT {SESSION_COLUMNS} FROM sessions WHERE id = %s", (session_id,)
+                f"SELECT {SESSION_COLUMNS}, pydantic_message FROM sessions WHERE id = %s",
+                (session_id,),
             )
             row = cur.fetchone()
     session = _row_to_session(row)

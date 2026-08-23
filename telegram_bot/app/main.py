@@ -10,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.backend import BackendClient
 from app.config import Settings
 from app.handlers import chat, model, reset, start
+from app.handlers.help import router as test_format_router
 
 
 async def main() -> None:
@@ -30,6 +31,7 @@ async def main() -> None:
     dp.include_router(start.router)
     dp.include_router(model.router)
     dp.include_router(reset.router)
+    dp.include_router(test_format_router)
     dp.include_router(chat.router)
 
     dp["settings"] = settings

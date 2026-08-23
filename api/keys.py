@@ -11,9 +11,11 @@ Design notes (per the refactor spec):
 """
 
 import psycopg2
+import os
 from pydantic import BaseModel
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException
+from cryptography.fernet import Fernet
 
 router = APIRouter(prefix="/keys", tags=["API Keys"])
 
@@ -21,12 +23,20 @@ router = APIRouter(prefix="/keys", tags=["API Keys"])
 def encrypt(raw_key: str) -> str:
     # ponytail: plug real encryption here (e.g. Fernet.encrypt) when a KMS
     # key/secret is available. Keeping this isolated per design rule #3.
-    return raw_key
+    master_key = os.environ["ENCRYPTION_MASTER_KEY"]
+    fernet = Fernet(master_key)
+
+    encrypted_key = fernet.encrypt(raw_key.encode())
+    return encrypted_key.decode()
 
 
 def decrypt(stored_value: str) -> str:
     # ponytail: plug real decryption here to match encrypt() above.
-    return stored_value
+
+    master_key = os.environ["ENCRYPTION_MASTER_KEY"]
+    fernet = Fernet(master_key)
+
+    return fernet.decrypt(stored_value).decode()
 
 
 class ApiKeyIn(BaseModel):

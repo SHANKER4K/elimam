@@ -16,6 +16,7 @@ cli/whoosh_index
 
 
 data/
+tests/
 tensors/
 node_modules/
 tafsir_data/

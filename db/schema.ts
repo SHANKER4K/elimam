@@ -140,14 +140,10 @@ export const messages = pgTable(
     role: text("role").notNull(),
     content: text("content"),
     metadata: jsonb("metadata"),
-    sequence: integer("sequence").notNull(),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
-  (table) => [
-    index("messages_session_id_idx").on(table.sessionId),
-    index("messages_session_sequence_idx").on(table.sessionId, table.sequence),
-  ],
+  (table) => [index("messages_session_id_idx").on(table.sessionId)],
 );

@@ -15,6 +15,7 @@ cli/whoosh_index
 .agents
 
 
+elimam_telebot/
 data/
 tensors/
 node_modules/

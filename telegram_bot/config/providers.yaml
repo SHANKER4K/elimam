@@ -1,0 +1,38 @@
+providers:
+  opencode:
+    url: "https://opencode.ai/zen/v1"
+    models:
+      deepseek-v4-flash-free:
+        variants:
+          - low
+          - high
+          - max
+      big-pickle:
+        variants:
+          - low
+          - high
+          - max
+      mimo-v2.5-free:
+        variants:
+          - low
+          - high
+          - max
+  dahl:
+    url: "https://inference.dahl.global/v1"
+    models:
+      moonshotai/Kimi-K2.6:
+        variants:
+          - low
+          - high
+          - max
+      deepseek-ai/DeepSeek-V4-Flash-0731:
+        variants:
+          - low
+          - high
+          - max
+      MiniMaxAI/MiniMax-M2.7:
+        variants:
+          - low
+          - high
+          - max
+
