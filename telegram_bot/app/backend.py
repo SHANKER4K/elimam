@@ -189,7 +189,13 @@ class BackendClient:
                     json={"message": prompt},
                     headers=headers,
                 ) as response:
-                    response.raise_for_status()
+                    if response.status_code >= 400:
+                        # ponytail: must read inside the stream context;
+                        # .text on an unread streaming response raises ResponseNotRead
+                        body = (await response.aread()).decode(errors="replace")[:500]
+                        raise BackendError(
+                            f"Backend returned {response.status_code}: {body}"
+                        )
 
                     event: str | None = None
                     async for line in response.aiter_lines():
@@ -231,8 +237,5 @@ class BackendClient:
                             text = payload.get("text")
                             if text:
                                 yield text
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
-            raise BackendError(f"Backend returned {exc.response.status_code}: {body}") from exc
         except httpx.HTTPError as exc:
             raise BackendError("Could not connect to the backend") from exc

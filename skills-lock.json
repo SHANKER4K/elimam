@@ -7,6 +7,18 @@
       "skillPath": "skills/building-pydantic-ai-agents/SKILL.md",
       "computedHash": "5721f34beafb1f1a8ad5c82ad643addded408baa5c91d6b9d2e0bcc55dc5b46b"
     },
+    "code-review-skill": {
+      "source": "awesome-skills/code-review-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "f3d9764f15d318ee5fdb465015bd77f1efbf7c8e48c68a1620a5710c5dd6a262"
+    },
+    "logging-best-practices": {
+      "source": "boristane/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/logging-best-practices/SKILL.md",
+      "computedHash": "b4810947c33b5356bf385c84cfe387afa9c54af652baaedb7d642a083cceaa4c"
+    },
     "pydantic": {
       "source": "pydantic/skills",
       "sourceType": "github",

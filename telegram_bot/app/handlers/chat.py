@@ -98,9 +98,16 @@ async def handle_text(
                     parse_mode="MarkdownV2",
                 )
 
-        except BackendError:
-            await message.answer("حدث خطأ في الاتصال بالخادم، حاول مرة أخرى.")
+        except BackendError as exc:
+            if " 409:" in str(exc):
+                await message.answer(
+                    "لا توجد جلسة نشطة. استخدم /start أو /model لاختيار نموذج أولاً."
+                )
+            else:
+                await message.answer("حدث خطأ في الاتصال بالخادم، حاول مرة أخرى.")
+                logger.error(exc)
 
-        except Exception:
+        except Exception as exc:
             logger.exception("Error while processing text message")
             await message.answer("حدث خطأ أثناء تجهيز الرد، حاول مرة أخرى.")
+            logger.error(exc)

@@ -157,7 +157,7 @@ async def model_choose_model(callback: CallbackQuery, state: FSMContext) -> None
         f"مزود الخدمة: {provider}\nالنموذج: {model}\n\nاختر مستوى التفكير:"
     )
     await callback.message.answer(
-        "اختر الإضافة (Variant):", reply_markup=variants_keyboard(providers, provider, model)
+        "اختر درجة التفكير للنموذج:", reply_markup=variants_keyboard(providers, provider, model)
     )
     await callback.answer()
 

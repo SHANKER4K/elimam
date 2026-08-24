@@ -84,7 +84,6 @@ def _dense_query(text: str) -> list[float]:
 def _sparse_query(text: str) -> models.SparseVector:
     """Embed a query with fastembed BM25. Raw text (no dediac) — matches how sparse
     vectors were indexed in update_qdrant.py."""
-    text = _preprocess(text)
     sv = list(sparse_model.embed([text]))[0]
     return models.SparseVector(indices=sv.indices.tolist(), values=sv.values.tolist())
 
