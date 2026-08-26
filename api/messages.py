@@ -56,13 +56,11 @@ def add_message(req: Message):
         except psycopg2.Error as e:
             conn.rollback()
             raise HTTPException(status_code=400, detail=str(e))
-    return (
-        {
-            "id": str(row[0]),
-            "session_id": str(row[1]),
-            "role": row[2],
-            "content": row[3],
-            "metadata": row[4],
-            "sequence": row[5],
-        },
-    )
+    return {
+        "id": str(row[0]),
+        "session_id": str(row[1]),
+        "role": row[2],
+        "content": row[3],
+        "metadata": row[4],
+        "sequence": row[5],
+    }

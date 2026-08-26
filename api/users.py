@@ -63,6 +63,26 @@ async def get_user_by_telegram_id(telegram_id: str):
     return user
 
 
+@router.put("/telegram/link")
+async def link_telegram(req: User):
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE SET email = %s WHERE telegram_id = %s",
+                    (
+                        req.email,
+                        req.telegram_id,
+                    ),
+                )
+                row = cur.fetchone()
+                conn.commit()
+        except psycopg2.Error as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+    return _row_to_user(row)
+
+
 @router.post("/add")
 def add_user(req: User):
     with get_conn() as conn:

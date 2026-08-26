@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -174,42 +175,57 @@ async def stream(
         tools=tools,
     )
 
-    history = load_session(session_id) if not web else sessions.get(session_id, [])
-    async with agent.run_stream_events(prompt, message_history=history) as events:
-        async for event in events:
-            match event:
-                case PartStartEvent(part=TextPart() as part):
-                    yield sse(
-                        "message_start", {"index": event.index, "text": part.content}
-                    )
-                case PartDeltaEvent(delta=TextPartDelta() as delta):
-                    yield sse("text_delta", {"text": delta.content_delta})
+    history = (
+        await asyncio.to_thread(load_session, session_id)
+        if not web
+        else sessions.get(session_id, [])
+    )
+    saved = False
+    try:
+        async with agent.run_stream_events(prompt, message_history=history) as events:
+            async for event in events:
+                match event:
+                    case PartStartEvent(part=TextPart() as part):
+                        yield sse(
+                            "message_start",
+                            {"index": event.index, "text": part.content},
+                        )
+                    case PartDeltaEvent(delta=TextPartDelta() as delta):
+                        yield sse("text_delta", {"text": delta.content_delta})
 
-                case FunctionToolCallEvent(part=ToolCallPart() as part):
-                    yield sse(
-                        "tool",
-                        {
-                            "text": part.tool_name,  # tool name
-                            "tool_call_id": part.tool_call_id,  # id to match results
-                            "args": part.args_as_dict(),  # the parsed arguments (dict)
-                        },
-                    )
+                    case FunctionToolCallEvent(part=ToolCallPart() as part):
+                        yield sse(
+                            "tool",
+                            {
+                                "text": part.tool_name,  # tool name
+                                "tool_call_id": part.tool_call_id,  # id to match results
+                                "args": part.args_as_dict(),  # the parsed arguments (dict)
+                            },
+                        )
 
-                case FunctionToolResultEvent(part=ToolReturnPart() as part):
-                    yield sse(
-                        "tool_result",
-                        {"text": part.content, "tool_call_id": part.tool_call_id},
-                    )
+                    case FunctionToolResultEvent(part=ToolReturnPart() as part):
+                        yield sse(
+                            "tool_result",
+                            {"text": part.content, "tool_call_id": part.tool_call_id},
+                        )
 
-                case PartEndEvent(part=TextPart()):
-                    yield sse("message_end", {})
+                    case PartEndEvent(part=TextPart()):
+                        yield sse("message_end", {})
 
-                case AgentRunResultEvent(result=result):
-                    if not web:
-                        save_session_messages(session_id, result.all_messages())
-                    else:
-                        sessions[session_id] = result.all_messages()
-                    yield sse("done", {"output": result.output})
+                    case AgentRunResultEvent(result=result):
+                        if not web:
+                            await asyncio.to_thread(
+                                save_session_messages, session_id, result.all_messages()
+                            )
+                        else:
+                            sessions[session_id] = result.all_messages()
+                        saved = True
+                        yield sse("done", {"output": result.output})
+    finally:
+        if not saved:
+            # ponytail: partial history is lost on disconnect; log it until we
+            # persist accumulated deltas on abort.
+            logger.warning("stream_aborted_no_save")
 
 
 setup_indexes()
@@ -260,7 +276,7 @@ async def log_compaction(ctx, request_context):
 
 
 @router.post("")
-async def chat_stream(
+def chat_stream(
     req: ChatRequest,
     x_bot_secret: str | None = Header(default=None, alias="X-Bot-Secret"),
     x_telegram_id: str | None = Header(default=None, alias="X-Telegram-Id"),

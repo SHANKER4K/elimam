@@ -41,7 +41,7 @@ class _RequestIdFilter(logging.Filter):
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         payload = {
-            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "time": self.formatTime(record, "%Y-%m-%d T%H:%M:%S%z"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -132,6 +132,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         extra={"method": request.method, "path": request.url.path},
     )
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
 
 app.include_router(chat_router)
 app.include_router(sessions_router)

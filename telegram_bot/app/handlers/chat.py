@@ -107,7 +107,6 @@ async def handle_text(
                 await message.answer("حدث خطأ في الاتصال بالخادم، حاول مرة أخرى.")
                 logger.error(exc)
 
-        except Exception as exc:
+        except Exception:
             logger.exception("Error while processing text message")
             await message.answer("حدث خطأ أثناء تجهيز الرد، حاول مرة أخرى.")
-            logger.error(exc)

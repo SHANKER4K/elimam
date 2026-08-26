@@ -49,8 +49,8 @@ services:
   backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: elimam:v2
+      dockerfile: dockerfile
+    image: elimam:latest
     container_name: backend
     restart: unless-stopped
 
@@ -81,20 +81,29 @@ services:
       - BOT_SHARED_SECRET=${BOT_SHARED_SECRET}
       # Fernet key for encrypting api_keys.encrypted_key at rest.
       - API_KEY_ENCRYPTION_KEY=${API_KEY_ENCRYPTION_KEY}
+      # Persist model caches across restarts: HF hub cache (GATE-AraBert-v1
+      # original) bind-mounted from host, fastembed BM25 in the named volume.
+      - HF_HOME=/models/hf
+      - XDG_CACHE_HOME=/models/cache
 
     volumes:
       - ./config/providers.yaml:/app/config/providers.yaml:ro
       - ./skills/turath-index-skill.md:/app/skills/turath-index-skill
+      - /home/ismail/.cache/huggingface:/models/hf
+      - model_cache:/models
 
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/chat/health')"]
-      interval: 15s
+      interval: 120s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 120s
 
   telegram:
-    build: ./telegram_bot/
+    build:
+      context: ./telegram_bot/
+      dockerfile: dockerfile
+
     image: elimam_bot:latest
     container_name: elimam_bot
     restart: unless-stopped
@@ -122,4 +131,5 @@ services:
 
 volumes:
   pgdata:
+  model_cache:
 

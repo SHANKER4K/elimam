@@ -13,6 +13,10 @@ class BackendError(RuntimeError):
     pass
 
 
+class BackendNotFound(BackendError):
+    pass
+
+
 class BackendClient:
     """Thin HTTP client. The bot never touches the database directly - every
     operation goes through the backend, per the architecture rule that the
@@ -22,6 +26,10 @@ class BackendClient:
         self.base_url = base_url.rstrip("/")
         self.bot_shared_secret = bot_shared_secret
         self.timeout = timeout
+        self._client = httpx.AsyncClient(timeout=timeout)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     def _bot_headers(self) -> dict[str, str]:
         if not self.bot_shared_secret:
@@ -51,17 +59,19 @@ class BackendClient:
         headers: dict[str, str] | None = None,
     ) -> Any:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.request(
-                    method, f"{self.base_url}{path}", json=json_body, headers=headers
-                )
-                response.raise_for_status()
-                if response.status_code == 204 or not response.content:
-                    return None
-                return response.json()
+            response = await self._client.request(
+                method, f"{self.base_url}{path}", json=json_body, headers=headers
+            )
+            response.raise_for_status()
+            if response.status_code == 204 or not response.content:
+                return None
+            return response.json()
         except httpx.HTTPStatusError as exc:
             body = exc.response.text[:500]
-            raise BackendError(f"Backend returned {exc.response.status_code}: {body}") from exc
+            msg = f"Backend returned {exc.response.status_code}: {body}"
+            if exc.response.status_code == 404:
+                raise BackendNotFound(msg) from exc
+            raise BackendError(msg) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise BackendError("Could not communicate with the backend") from exc
 
@@ -78,10 +88,8 @@ class BackendClient:
         path = path_template.format(telegram_id=telegram_id)
         try:
             return await self._request_json("GET", path)
-        except BackendError as exc:
-            if " 404:" in str(exc):
-                return None
-            raise
+        except BackendNotFound:
+            return None
 
     async def create_user(
         self, *, path: str, username: str, display_name: str, telegram_id: str
@@ -102,10 +110,8 @@ class BackendClient:
         path = path_template.format(user_id=user_id)
         try:
             return await self._request_json("GET", path)
-        except BackendError as exc:
-            if " 404:" in str(exc):
-                return None
-            raise
+        except BackendNotFound:
+            return None
 
     async def create_session(
         self,
@@ -182,60 +188,59 @@ class BackendClient:
         headers = self._identity_headers(telegram_id, username, display_name)
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}{path}",
-                    json={"message": prompt},
-                    headers=headers,
-                ) as response:
-                    if response.status_code >= 400:
-                        # ponytail: must read inside the stream context;
-                        # .text on an unread streaming response raises ResponseNotRead
-                        body = (await response.aread()).decode(errors="replace")[:500]
-                        raise BackendError(
-                            f"Backend returned {response.status_code}: {body}"
+            async with self._client.stream(
+                "POST",
+                f"{self.base_url}{path}",
+                json={"message": prompt},
+                headers=headers,
+            ) as response:
+                if response.status_code >= 400:
+                    # ponytail: must read inside the stream context;
+                    # .text on an unread streaming response raises ResponseNotRead
+                    body = (await response.aread()).decode(errors="replace")[:500]
+                    raise BackendError(
+                        f"Backend returned {response.status_code}: {body}"
+                    )
+
+                event: str | None = None
+                async for line in response.aiter_lines():
+                    if line.startswith("event: "):
+                        event = line[7:]
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+
+                    raw = line[6:]
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if event in {"tool"}:
+                        text = f"🔎  **{payload.get('text')}**: **{payload.get('args', {}).get('id', '')}**".strip()
+                        mdv2 = markdownify(text)
+
+                        await sender.answer(
+                            mdv2,
+                            parse_mode="MarkdownV2",
                         )
 
-                    event: str | None = None
-                    async for line in response.aiter_lines():
-                        if line.startswith("event: "):
-                            event = line[7:]
-                            continue
-                        if not line.startswith("data: "):
-                            continue
-
-                        raw = line[6:]
-                        try:
-                            payload = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
-
-                        if event in {"tool"}:
-                            text = f"🔎  **{payload.get('text')}**: **{payload.get('args', {}).get('id', '')}**".strip()
-                            mdv2 = markdownify(text)
-
-                            await sender.answer(
-                                mdv2,
-                                parse_mode="MarkdownV2",
-                            )
-
-                        if event == "error":
-                            raise BackendError(payload.get("message", "backend error"))
-                        if event == "message_start":
-                            text = payload.get("text")
-                            if text:
-                                yield text
-                        if event == "text_delta":
-                            text = payload.get("text")
-                            if text:
-                                yield text
-                        elif event in {"done", "message_end"}:
-                            if event == "done":
-                                break
-                        elif event is None:
-                            text = payload.get("text")
-                            if text:
-                                yield text
+                    if event == "error":
+                        raise BackendError(payload.get("message", "backend error"))
+                    if event == "message_start":
+                        text = payload.get("text")
+                        if text:
+                            yield text
+                    if event == "text_delta":
+                        text = payload.get("text")
+                        if text:
+                            yield text
+                    elif event in {"done", "message_end"}:
+                        if event == "done":
+                            break
+                    elif event is None:
+                        text = payload.get("text")
+                        if text:
+                            yield text
         except httpx.HTTPError as exc:
             raise BackendError("Could not connect to the backend") from exc

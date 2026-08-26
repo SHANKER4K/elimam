@@ -261,8 +261,10 @@ def dense_search(
             ).points
         ]
 
+    except ValueError:
+        raise
     except Exception as e:
-        return [e]
+        return [{"error": f"{type(e).__name__}: {e}"}]
     return res
 
 
@@ -319,8 +321,10 @@ def sparse_search(
                 query_filter=_build_filter(collection, filters),
             ).points
         ]
+    except ValueError:
+        raise
     except Exception as e:
-        return [e]
+        return [{"error": f"{type(e).__name__}: {e}"}]
     return res
 
 
@@ -394,8 +398,10 @@ def hybrid_search(
                 query_filter=_build_filter(collection, filters),
             ).points
         ]
+    except ValueError:
+        raise
     except Exception as e:
-        return [e]
+        return [{"error": f"{type(e).__name__}: {e}"}]
     return res
 
 
@@ -477,8 +483,10 @@ def hybrid_search_weighted(
             timeout=30,
         )
         response.raise_for_status()
+    except ValueError:
+        raise
     except Exception as e:
-        return [e]
+        return [{"error": f"{type(e).__name__}: {e}"}]
     return response.json()["result"]["points"]
 
 

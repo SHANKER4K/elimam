@@ -105,3 +105,12 @@ providers:
           - high
           - max
 
+  free:
+    url: "http://localhost:20128/v1"
+    models:
+      shk-combo:
+        variants:
+          - low
+          - high
+          - max
+

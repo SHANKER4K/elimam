@@ -32,8 +32,6 @@ async def test_format(message: Message) -> None:
 
     mdv2 = markdownify(text)
 
-    logger.info("MarkdownV2: %r", mdv2)
-
     await message.answer(
         mdv2,
         parse_mode="MarkdownV2",

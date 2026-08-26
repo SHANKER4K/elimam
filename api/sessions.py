@@ -145,7 +145,7 @@ def reset_session(user_id: str) -> dict:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = %s AND is_active IS TRUE",
+                    f"SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = %s AND is_active IS TRUE FOR UPDATE",
                     (user_id,),
                 )
                 current = cur.fetchone()

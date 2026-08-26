@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -14,6 +15,11 @@ from app.handlers.help import router as test_format_router
 
 
 async def main() -> None:
+    # ponytail: plain text is enough here; the JSON pipeline lives in the backend.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     settings = Settings.from_env()
 
     bot = Bot(
@@ -40,6 +46,7 @@ async def main() -> None:
     try:
         await dp.start_polling(bot)
     finally:
+        await backend.aclose()
         await bot.session.close()
 
 
