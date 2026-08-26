@@ -21,6 +21,7 @@ from pydantic_ai.messages import TextPart, TextPartDelta, ModelMessagesTypeAdapt
 from pydantic_ai.capabilities.hooks import Hooks
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
     SummarizingCompaction,
@@ -160,20 +161,7 @@ async def stream(
     web: bool,
 ):
     global sessions
-    provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
-    model = OpenAIChatModel(model_name, provider=provider)
-    model_settings = OpenAIResponsesModelSettings(
-        temperature=0.5, service_tier="flex", thinking=str(variant)
-    )
-
-    agent = Agent(
-        model,
-        name="islamic_scholar_agent",
-        model_settings=model_settings,
-        system_prompt=system_prompt,
-        capabilities=capabilities,
-        tools=tools,
-    )
+    global agent
 
     history = (
         await asyncio.to_thread(load_session, session_id)
@@ -257,6 +245,23 @@ tools = [
     hybrid_search,
     hybrid_search_weighted,
 ]
+
+variant = os.getenv("MODEL_VARIANT")
+model = OpenAIChatModel(
+    "deepseek-v4-flash", provider=DeepSeekProvider(api_key=os.getenv("API_KEY"))
+)
+model_settings = OpenAIResponsesModelSettings(
+    temperature=0.5, service_tier="flex", thinking=str(variant)
+)
+
+agent = Agent(
+    model,
+    name="islamic_scholar_agent",
+    model_settings=model_settings,
+    system_prompt=system_prompt,
+    capabilities=capabilities,
+    tools=tools,
+)
 
 
 @hooks.on.before_tool_execute
