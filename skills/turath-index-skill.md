@@ -86,6 +86,10 @@ Default to Arabic. Reply in English only if the user explicitly asks for it — 
 * `baghawy` → `ar-tafsir-al-baghawi`
 (or use the Shamela URL if provided in the payload)
 
+## Response Template
+
+* When you are going to print an ayah make it between ###{ayah}### even it is inside tafsir or anything every ayah should follow that format (this is a must)
+
 ## Examples
 
 **"أعطني آية الكرسي"** (exact ayah requested by name, not number)
@@ -96,3 +100,7 @@ Default to Arabic. Reply in English only if the user explicitly asks for it — 
 
 **"الآيات التي تتحدث عن الصبر"** (topic search across Quranic verses)
 → `hybrid_search(collection="quran", query_text="الصبر", top_k=5)` → cite each result using the `quran-ayah` format.
+
+* An examples of putting ayah between ###{ayah}###
+  * ###بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ###
+  * قال: أي يقول الكافرون إذا عاينوا عذاب الله وعقابه سائلين رفعه وكشفه عنهم، كقوله تعالى: {###وَلَوْ تَرَىٰ إِذْ وُقِفُوا عَلَى النَّارِ فَقَالُوا يَا لَيْتَنَا نُرَدُّ###...} [الأنعام: 27]، وقوله: {###رَبَّنَا أَخِّرْنَا إِلَىٰ أَجَلٍ قَرِيبٍ نُجِبْ دَعْوَتَكَ وَنَتَّبِعِ الرُّسُلَ###} [إبراهيم: 44]. ثم قال تعالى: {###أَنَّىٰ لَهُمُ الذِّكْرَىٰ وَقَدْ جَاءَهُمْ رَسُولٌ مُّبِينٌ###}. تفسير ابن كثير - الدخان: 12
