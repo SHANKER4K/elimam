@@ -16,6 +16,7 @@ cli/whoosh_index
 
 
 data/
+notebooks/
 tests/
 tensors/
 node_modules/

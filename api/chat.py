@@ -30,7 +30,6 @@ from pydantic_ai_harness.compaction import (
 
 from db.connection import get_conn
 
-logger = logging.getLogger("api.chat")
 from search import (
     get_quran,
     get_hadith,
@@ -48,6 +47,8 @@ from search import (
 from api.users import get_or_create_user_by_telegram_id
 from api.keys import get_decrypted_key
 from api.providers import resolve_model_config
+
+logger = logging.getLogger("api.chat")
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
