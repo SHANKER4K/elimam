@@ -180,11 +180,7 @@ class BackendClient:
         username: str | None,
         display_name: str | None,
     ) -> AsyncIterator[str]:
-        prompt = (
-            "You are in Telegram, so ignore the printing formats of Quran and hadith. "
-            "Use block quotes for Quran and hadith instead.\n\n"
-            f"{message}"
-        )
+        prompt = f"{message}"
         headers = self._identity_headers(telegram_id, username, display_name)
 
         try:
@@ -198,9 +194,7 @@ class BackendClient:
                     # ponytail: must read inside the stream context;
                     # .text on an unread streaming response raises ResponseNotRead
                     body = (await response.aread()).decode(errors="replace")[:500]
-                    raise BackendError(
-                        f"Backend returned {response.status_code}: {body}"
-                    )
+                    raise BackendError(f"Backend returned {response.status_code}: {body}")
 
                 event: str | None = None
                 async for line in response.aiter_lines():
