@@ -32,12 +32,8 @@ from db.connection import get_conn
 
 from search import (
     get_quran,
-    get_hadith,
     get_tafsir,
-    get_book,
-    get_books_hadith,
     get_books_tafsir,
-    get_books_books,
     setup_indexes,
     dense_search,
     sparse_search,
@@ -235,12 +231,8 @@ hooks = Hooks()
 capabilities = [hooks, compact_tools, compact_summary, context_report]
 tools = [
     get_quran,
-    get_hadith,
     get_tafsir,
-    get_book,
-    get_books_hadith,
     get_books_tafsir,
-    get_books_books,
     dense_search,
     sparse_search,
     hybrid_search,
