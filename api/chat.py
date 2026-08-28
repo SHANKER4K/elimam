@@ -29,7 +29,6 @@ from pydantic_ai_harness.compaction import (
 
 from db.connection import get_conn
 
-logger = logging.getLogger("api.chat")
 from search import (
     get_quran,
     get_hadith,
@@ -48,6 +47,7 @@ from api.users import get_or_create_user_by_telegram_id
 from api.keys import get_decrypted_key
 from api.providers import resolve_model_config
 
+logger = logging.getLogger("api.chat")
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # ---------------------------------------------------------------------------
@@ -64,12 +64,11 @@ BOT_SHARED_SECRET = os.environ.get("BOT_SHARED_SECRET", "")
 
 class WebChatRequest(BaseModel):
     message: str
+    user_id: str
     model_name: str
     model_provider: str
     model_variant: str
     session_id: str
-    api_key: str
-    web: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -175,11 +174,7 @@ async def stream(
         tools=tools,
     )
 
-    history = (
-        await asyncio.to_thread(load_session, session_id)
-        if not web
-        else sessions.get(session_id, [])
-    )
+    history = await asyncio.to_thread(load_session, session_id)
     saved = False
     try:
         async with agent.run_stream_events(prompt, message_history=history) as events:
@@ -354,11 +349,9 @@ async def chat_web_stream(req: WebChatRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    api_key = req.api_key
-    if not api_key:
-        raise HTTPException(
-            status_code=400, detail="No API key on file for this provider"
-        )
+    api_key = get_decrypted_key(req.user_id, req.model_provider)
+    if api_key is None and req.model_provider != "free":
+        raise HTTPException(400, "API key not set for this provider")
 
     return StreamingResponse(
         stream(
@@ -368,7 +361,7 @@ async def chat_web_stream(req: WebChatRequest):
             api_key=api_key,
             model_name=model_config["model"],
             variant=model_config["variant"],
-            web=req.web,
+            web=True,
         ),
         media_type="text/event-stream",
     )
