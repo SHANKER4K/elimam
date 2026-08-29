@@ -483,16 +483,23 @@ async def hydrate_chat_response(
     with `[surah:ayah]` tokens, validates each fragment against the
     authoritative Quran record, and constructs the final response.
     """
+    global _fragment_fallback_count
+
     cleaned_text, fragment_requests = _extract_marker_requests(raw_text)
+
+    fallback_before = _fragment_fallback_count
+    total_markers = len(fragment_requests)
 
     quran_cache: dict[str, dict] = {}
     detected_citations: list[DetectedCitation] = []
     resource_by_key: dict[tuple, Resource] = {}
+    cited_keys: set[tuple[int, int]] = set()
 
     for order, request in enumerate(fragment_requests, start=1):
         citation = request["citation"]
         surah_number = request["surah_number"]
         ayah_number = request["ayah_number"]
+        cited_keys.add((surah_number, ayah_number))
 
         if citation not in quran_cache:
             record = await asyncio.to_thread(
@@ -535,7 +542,11 @@ async def hydrate_chat_response(
             )
             resource_by_key[key] = quran_resource
 
+    # Only include tool-return resources whose (surah, ayah) was actually
+    # cited in the final answer — prevents leaking unused retrievals.
     for resource in _collect_resources(messages):
+        if (resource.surah_number, resource.ayah_number) not in cited_keys:
+            continue
         key = (
             resource.source_type,
             resource.surah_number,
@@ -543,6 +554,18 @@ async def hydrate_chat_response(
             resource.tafsir_book,
         )
         resource_by_key[key] = resource
+
+    fallback_after = _fragment_fallback_count
+    response_fallbacks = fallback_after - fallback_before
+    if total_markers > 0:
+        logger.info(
+            "marker_fragment_fallback",
+            extra={
+                "fallback_count": response_fallbacks,
+                "total_markers": total_markers,
+                "fallback_rate": round(response_fallbacks / total_markers, 3),
+            },
+        )
 
     # ponytail: catch prompt drift where the LLM emits a malformed marker
     # (missing pipe, unclosed brace) that the regex silently skipped. The
