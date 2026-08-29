@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import re
+from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 from pydantic_ai import (
     Agent,
     FunctionToolCallEvent,
@@ -17,11 +19,17 @@ from pydantic_ai import (
     ToolCallPart,
     ToolReturnPart,
 )
-from pydantic_ai.messages import TextPart, TextPartDelta, ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    TextPart,
+    TextPartDelta,
+    ModelMessagesTypeAdapter,
+    ModelMessage,
+)
 from pydantic_ai.capabilities.hooks import Hooks
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.deepseek import DeepSeekProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
     SummarizingCompaction,
@@ -74,8 +82,134 @@ class ChatRequest(BaseModel):
     message: str
 
 
-class ChatResponse(BaseModel):
+class TelegramChatResponse(BaseModel):
     response: str
+
+
+CITATION_PATTERN = re.compile(r"\[(\d{1,3}):(\d{1,3})\]")
+
+# Inline marker the LLM emits: {exact_arabic_fragment|surah:ayah}. The server
+# replaces it with [surah:ayah] and validates the fragment against the record.
+RAW_CITATION_PATTERN = re.compile(
+    r"\{(?P<fragment>[^{}|]+)\|(?P<surah>\d{1,3}):(?P<ayah>\d{1,3})\}"
+)
+
+# Module-level tashkīl-fallback counter for production observability.
+_fragment_fallback_count = 0
+
+TAFSIR_BOOK_TO_SLUG = {
+    "saadi": "ar-tafseer-al-saddi",
+    "katheer": "ar-tafsir-ibn-kathir",
+    "moyassar": "ar-tafsir-muyassar",
+    "tabary": "ar-tafsir-al-tabari",
+    "baghawy": "ar-tafsir-al-baghawi",
+}
+
+TAFSIR_BOOK_TO_NAME = {
+    "saadi": "السعدي",
+    "katheer": "ابن كثير",
+    "moyassar": "الميسر",
+    "tabary": "الطبري",
+    "baghawy": "البغوي",
+}
+
+RETRIEVAL_TOOLS = {
+    "get_quran",
+    "get_tafsir",
+    "dense_search",
+    "sparse_search",
+    "hybrid_search",
+    "hybrid_search_weighted",
+}
+
+
+class DetectedCitation(BaseModel):
+    """
+    One Quran citation occurrence in the final API response.
+
+    Fully server-constructed; the LLM never authors these fields. `order`
+    follows the left-to-right occurrence order in `raw_response_text`.
+    """
+
+    order: int = Field(ge=1)
+
+    surah_number: int = Field(ge=1, le=114)
+    surah_name: str = Field(min_length=1)
+    ayah_number: int = Field(ge=1)
+
+    citation: str = Field(description="Canonical Quran citation, e.g. [2:153].")
+
+    fragment_start: int = Field(
+        ge=0,
+        description=(
+            "Zero-based inclusive start offset in the authoritative ayah text."
+        ),
+    )
+
+    fragment_end: int = Field(
+        gt=0,
+        description=("Zero-based exclusive end offset in the authoritative ayah text."),
+    )
+
+    verse_fragment_text: str = Field(
+        min_length=1,
+        description="Verified Quran text extracted from the Quran collection.",
+    )
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> "DetectedCitation":
+        expected = f"[{self.surah_number}:{self.ayah_number}]"
+        if self.citation != expected:
+            raise ValueError(
+                f"citation must equal {expected!r} based on surah_number "
+                "and ayah_number"
+            )
+        if self.fragment_end <= self.fragment_start:
+            raise ValueError("fragment_end must be greater than fragment_start")
+        return self
+
+
+class Resource(BaseModel):
+    """A unique source actually used for the final answer."""
+
+    source_type: Literal["quran", "tafsir"]
+
+    title: str = Field(min_length=1)
+    url: HttpUrl
+
+    surah_number: int = Field(ge=1, le=114)
+    ayah_number: int = Field(ge=1)
+
+    tafsir_book: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source_type(self) -> "Resource":
+        if self.source_type == "tafsir" and not self.tafsir_book:
+            raise ValueError("tafsir_book is required for a tafsir resource")
+        if self.source_type == "quran" and self.tafsir_book is not None:
+            raise ValueError("tafsir_book must be None for a quran resource")
+        return self
+
+
+class ChatResponse(BaseModel):
+    """
+    Final API response returned to the client after server-side hydration.
+    """
+
+    raw_response_text: str = Field(min_length=1)
+
+    detected_citations: list[DetectedCitation] = Field(default_factory=list)
+    resources: list[Resource] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_citation_occurrences(self) -> "ChatResponse":
+        orders = [item.order for item in self.detected_citations]
+        if orders != list(range(1, len(orders) + 1)):
+            raise ValueError("Citation orders must be 1, 2, 3, ... in list order")
+        for item in self.detected_citations:
+            if item.citation not in self.raw_response_text:
+                raise ValueError(f"{item.citation} does not occur in raw_response_text")
+        return self
 
 
 def sse(event: str, data):
@@ -148,17 +282,310 @@ def resolve_telegram_caller(
     return user["id"]
 
 
+def _iter_tool_returns(messages: list[ModelMessage]):
+    """Yield every ToolReturnPart from the researcher's message history."""
+    for msg in messages:
+        for part in getattr(msg, "parts", []):
+            if isinstance(part, ToolReturnPart):
+                yield part
+
+
+def _records_from_tool_return(part: ToolReturnPart) -> list[dict]:
+    """Unpack a tool return's content into a list of record payload dicts.
+
+    pydantic-ai serializes user-defined tool returns to JSON, so `content`
+    may be a JSON string. `get_quran`/`get_tafsir` return a single payload
+    dict; the search tools return Qdrant points, each with a `payload` key.
+    """
+    content = part.content
+    if isinstance(content, str):
+        try:
+            data = json.loads(content)
+        except (ValueError, TypeError):
+            return []
+    elif isinstance(content, (dict, list)):
+        data = content
+    else:
+        return []
+
+    records: list[dict] = []
+    if isinstance(data, dict):
+        if data.get("error"):
+            return []
+        records.append(
+            data.get("payload", data) if isinstance(data.get("payload"), dict) else data
+        )
+    elif isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict) or item.get("error"):
+                continue
+            payload = item.get("payload")
+            if isinstance(payload, dict):
+                records.append(payload)
+            else:
+                records.append(item)
+    return records
+
+
+def _quran_url(surah_number: int, ayah_number: int) -> str:
+    return f"https://quran.com/{surah_number}/{ayah_number}"
+
+
+def _tafsir_url(surah_number: int, ayah_number: int, tafsir_book: str) -> str | None:
+    slug = TAFSIR_BOOK_TO_SLUG.get(tafsir_book)
+    if not slug:
+        # ponytail: never fabricate a URL for an unknown slug — the resource
+        # is dropped instead of mislabeling a Quran URL as a Tafsir source.
+        return None
+    return f"https://quran.com/{surah_number}/{ayah_number}/tafsirs/{slug}"
+
+
+def _quran_resource(record: dict) -> Resource | None:
+    surah_number = int(record.get("surah_number", 0))
+    ayah_number = int(record.get("ayah_number", 0))
+    if not surah_number or not ayah_number:
+        return None
+    surah_name = str(record.get("surah", ""))
+    return Resource(
+        source_type="quran",
+        title=f"سورة {surah_name}: {ayah_number}",
+        url=_quran_url(surah_number, ayah_number),
+        surah_number=surah_number,
+        ayah_number=ayah_number,
+        tafsir_book=None,
+    )
+
+
+def _tafsir_resource(record: dict) -> Resource | None:
+    tafsir_book = record.get("tafsir_book")
+    if not tafsir_book:
+        return None
+    surah_number = int(record.get("surah_number", 0))
+    ayah_number = int(record.get("ayah_number", 0))
+    if not surah_number or not ayah_number:
+        return None
+    surah_name = str(record.get("surah", ""))
+    display_name = TAFSIR_BOOK_TO_NAME.get(tafsir_book, tafsir_book)
+    url = _tafsir_url(surah_number, ayah_number, tafsir_book)
+    if not url:
+        return None
+    return Resource(
+        source_type="tafsir",
+        title=f"تفسير {display_name} - {surah_name}: {ayah_number}",
+        url=url,
+        surah_number=surah_number,
+        ayah_number=ayah_number,
+        tafsir_book=tafsir_book,
+    )
+
+
+def _collect_resources(messages: list[ModelMessage]) -> list[Resource]:
+    """Walk the tool returns; build one Resource per unique retrieval.
+
+    Reads the records the researcher actually received (no re-running of
+    searches). `get_quran`/search-on-quran yield `quran` resources; anything
+    carrying a `tafsir_book` payload key yields a `tafsir` resource.
+    """
+    seen: set[tuple] = set()
+    resources: list[Resource] = []
+
+    def _add(resource: Resource | None) -> None:
+        if resource is None:
+            return
+        key = (
+            resource.source_type,
+            resource.surah_number,
+            resource.ayah_number,
+            resource.tafsir_book,
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        resources.append(resource)
+
+    for part in _iter_tool_returns(messages):
+        if part.tool_name not in RETRIEVAL_TOOLS:
+            continue
+        for record in _records_from_tool_return(part):
+            if "tafsir_book" in record:
+                _add(_tafsir_resource(record))
+            else:
+                _add(_quran_resource(record))
+
+    return resources
+
+
+def _extract_marker_requests(raw_text: str) -> tuple[str, list[dict]]:
+    """Replace every {fragment|surah:ayah} marker with a [surah:ayah] token.
+
+    Returns the cleaned text and an ordered list of fragment requests (one
+    per occurrence, duplicates allowed).
+    """
+    requests: list[dict] = []
+
+    def _replace(match: re.Match) -> str:
+        fragment = match.group("fragment").strip()
+        surah_number = int(match.group("surah"))
+        ayah_number = int(match.group("ayah"))
+        citation = f"[{surah_number}:{ayah_number}]"
+
+        if not fragment:
+            raise ValueError(f"Empty Quran fragment in marker for {citation}")
+
+        requests.append(
+            {
+                "citation": citation,
+                "surah_number": surah_number,
+                "ayah_number": ayah_number,
+                "requested_fragment_text": fragment,
+            }
+        )
+        return citation
+
+    cleaned = RAW_CITATION_PATTERN.sub(_replace, raw_text)
+    return cleaned, requests
+
+
+def _resolve_fragment(
+    ayah_text: str,
+    requested_fragment_text: str,
+) -> tuple[int, int, str]:
+    """Locate the requested fragment inside the authoritative ayah.
+
+    Falls back to the full verified ayah on a substring miss and logs the
+    fallback for observability (tashkīl drift is the common cause).
+    """
+    global _fragment_fallback_count
+
+    start = ayah_text.find(requested_fragment_text)
+    if start != -1:
+        end = start + len(requested_fragment_text)
+        return start, end, ayah_text[start:end]
+
+    _fragment_fallback_count += 1
+    logger.warning(
+        "fragment_not_found_fallback_to_full_ayah",
+        extra={"requested_fragment": requested_fragment_text},
+    )
+    return 0, len(ayah_text), ayah_text
+
+
+def _validate_marker_syntax(data: str) -> str:
+    """Output validator: reject malformed citation markers so the LLM retries.
+
+    Runs inside pydantic-ai's output-validation loop (text path), so raising
+    `ModelRetry` feeds the error back to the model up to the output-retry
+    budget instead of surfacing a hard 422.
+    """
+    stripped = RAW_CITATION_PATTERN.sub("", data)
+    if "{" in stripped or "}" in stripped:
+        raise ModelRetry(
+            "Your response contains a malformed citation marker. Every Quran "
+            "reference must use exactly the form {fragment_text|surah_number:"
+            "ayah_number} with the fragment copied from the retrieved record. "
+            "Fix or remove the malformed marker and return the corrected text."
+        )
+    return data
+
+
+async def hydrate_chat_response(
+    raw_text: str,
+    messages: list[ModelMessage],
+) -> ChatResponse:
+    """
+    Build the public API response from the LLM's raw text and the
+    researcher's tool history.
+
+    The LLM emits `{fragment|surah:ayah}` markers; the server replaces them
+    with `[surah:ayah]` tokens, validates each fragment against the
+    authoritative Quran record, and constructs the final response.
+    """
+    cleaned_text, fragment_requests = _extract_marker_requests(raw_text)
+
+    quran_cache: dict[str, dict] = {}
+    detected_citations: list[DetectedCitation] = []
+    resource_by_key: dict[tuple, Resource] = {}
+
+    for order, request in enumerate(fragment_requests, start=1):
+        citation = request["citation"]
+        surah_number = request["surah_number"]
+        ayah_number = request["ayah_number"]
+
+        if citation not in quran_cache:
+            record = await asyncio.to_thread(
+                get_quran, id=f"{surah_number}:{ayah_number}"
+            )
+            # get_quran returns a bare payload dict (search.py:348). If it
+            # ever starts wrapping payloads, unwrap here.
+            if not isinstance(record, dict) or not record.get("text"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Quran record not found for {citation}",
+                )
+            quran_cache[citation] = record
+
+        record = quran_cache[citation]
+        ayah_text = str(record["text"])
+
+        start, end, verified_fragment = _resolve_fragment(
+            ayah_text, request["requested_fragment_text"]
+        )
+
+        detected_citations.append(
+            DetectedCitation(
+                order=order,
+                surah_number=surah_number,
+                surah_name=str(record.get("surah", "")),
+                ayah_number=ayah_number,
+                citation=citation,
+                fragment_start=start,
+                fragment_end=end,
+                verse_fragment_text=verified_fragment,
+            )
+        )
+
+        quran_resource = _quran_resource(record)
+        if quran_resource:
+            key = (
+                quran_resource.source_type,
+                quran_resource.surah_number,
+                quran_resource.ayah_number,
+                quran_resource.tafsir_book,
+            )
+            resource_by_key[key] = quran_resource
+
+    for resource in _collect_resources(messages):
+        key = (
+            resource.source_type,
+            resource.surah_number,
+            resource.ayah_number,
+            resource.tafsir_book,
+        )
+        resource_by_key[key] = resource
+
+    # ponytail: catch prompt drift where the LLM emits a malformed marker
+    # (missing pipe, unclosed brace) that the regex silently skipped. The
+    # output validator normally catches these; this is a last-resort log.
+    if "{" in cleaned_text or "}" in cleaned_text:
+        logger.warning(
+            "unprocessed_citation_marker_leaked",
+            extra={"cleaned_text": cleaned_text},
+        )
+
+    return ChatResponse(
+        raw_response_text=cleaned_text,
+        detected_citations=detected_citations,
+        resources=list(resource_by_key.values()),
+    )
+
+
 async def stream(
+    request_agent: Agent,
     prompt: str,
     session_id: str,
-    provider_url: str,
-    api_key: str,
-    model_name: str,
-    variant: str,
     web: bool,
 ):
     global sessions
-    global agent
 
     history = (
         await asyncio.to_thread(load_session, session_id)
@@ -167,7 +594,9 @@ async def stream(
     )
     saved = False
     try:
-        async with agent.run_stream_events(prompt, message_history=history) as events:
+        async with request_agent.run_stream_events(
+            prompt, message_history=history
+        ) as events:
             async for event in events:
                 match event:
                     case PartStartEvent(part=TextPart() as part):
@@ -182,9 +611,9 @@ async def stream(
                         yield sse(
                             "tool",
                             {
-                                "text": part.tool_name,  # tool name
-                                "tool_call_id": part.tool_call_id,  # id to match results
-                                "args": part.args_as_dict(),  # the parsed arguments (dict)
+                                "text": part.tool_name,
+                                "tool_call_id": part.tool_call_id,
+                                "args": part.args_as_dict(),
                             },
                         )
 
@@ -205,7 +634,16 @@ async def stream(
                         else:
                             sessions[session_id] = result.all_messages()
                         saved = True
-                        yield sse("done", {"output": result.output})
+                        # `request_agent` outputs plain text; hydrate the
+                        # server-constructed fields before emitting.
+                        hydrated = await hydrate_chat_response(
+                            result.output,
+                            result.all_messages(),
+                        )
+                        yield sse(
+                            "done",
+                            {"output": hydrated.model_dump(mode="json")},
+                        )
     finally:
         if not saved:
             # ponytail: partial history is lost on disconnect; log it until we
@@ -215,9 +653,13 @@ async def stream(
 
 setup_indexes()
 
-system_prompt = ""
 with open("./skills/turath-index-skill.md") as file:
     system_prompt = file.read()
+
+with open("./skills/citations.md") as file:
+    citations = file.read()
+
+combined_system_prompt = system_prompt + "\n\n" + citations
 
 compact_tools = ClearToolResults(max_tokens=70_000)
 compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)
@@ -239,22 +681,41 @@ tools = [
     hybrid_search_weighted,
 ]
 
-variant = os.getenv("MODEL_VARIANT")
-model = OpenAIChatModel(
-    "deepseek-v4-flash", provider=DeepSeekProvider(api_key=os.getenv("API_KEY"))
-)
-model_settings = OpenAIResponsesModelSettings(
-    temperature=0.5, service_tier="flex", thinking=str(variant)
-)
 
-agent = Agent(
-    model,
-    name="islamic_scholar_agent",
-    model_settings=model_settings,
-    system_prompt=system_prompt,
-    capabilities=capabilities,
-    tools=tools,
-)
+def build_agent(
+    *,
+    # provider_url: str,
+    api_key: str,
+    model_name: str,
+    variant: str,
+) -> Agent:
+    """Build a request-local agent from the session's model configuration.
+
+    Uses `OpenAIProvider` so any OpenAI-compatible endpoint (DeepSeek,
+    OpenRouter, etc.) works; the per-user API key is passed in explicitly
+    instead of leaking from a module-level global.
+    """
+    model = OpenAIChatModel(
+        model_name,
+        provider=DeepSeekProvider(api_key=api_key),
+    )
+    model_settings = OpenAIResponsesModelSettings(
+        temperature=0.5,
+        service_tier="flex",
+        thinking=str(variant),
+    )
+    agent = Agent(
+        model,
+        name="islamic_scholar_agent",
+        model_settings=model_settings,
+        system_prompt=combined_system_prompt,
+        output_type=str,
+        retries={"output": 3},
+        capabilities=capabilities,
+        tools=tools,
+    )
+    agent.output_validator(_validate_marker_syntax)
+    return agent
 
 
 @hooks.on.before_tool_execute
@@ -313,18 +774,94 @@ def chat_stream(
             status_code=400, detail="No API key on file for this provider"
         )
 
+    request_agent = build_agent(
+        provider_url=model_config["url"],
+        api_key=api_key,
+        model_name=model_config["model"],
+        variant=model_config["variant"],
+    )
+
     return StreamingResponse(
         stream(
+            request_agent,
             req.message,
             session_id=session["id"],
-            provider_url=model_config["url"],
-            api_key=api_key,
-            model_name=model_config["model"],
-            variant=model_config["variant"],
             web=False,
         ),
         media_type="text/event-stream",
     )
+
+
+@router.post("/structured")
+async def chat(
+    req: ChatRequest,
+    x_bot_secret: str | None = Header(default=None, alias="X-Bot-Secret"),
+    x_telegram_id: str | None = Header(default=None, alias="X-Telegram-Id"),
+):
+    user_id = resolve_telegram_caller(x_bot_secret, x_telegram_id)
+
+    session = get_active_session_row(user_id)
+    if session is None:
+        raise HTTPException(
+            status_code=409,
+            detail="User has no active session",
+        )
+
+    # model_provider = session["model_provider"]
+    # model_name = session["model_name"]
+    # model_variant = session["model_variant"]
+    #
+    model_provider = "deepseek"
+    model_name = "deepseek-v4-flash"
+    model_variant = "low"
+
+    if not model_provider or not model_name or not model_variant:
+        raise HTTPException(
+            status_code=409,
+            detail="Active session is missing model configuration",
+        )
+
+    # api_key = await asyncio.to_thread(get_decrypted_key, user_id, model_provider)
+    api_key = os.getenv("API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="No API key on file for this provider",
+        )
+
+    # try:
+    #     model_config = resolve_model_config(
+    #         provider=model_provider,
+    #         model=model_name,
+    #         variant=model_variant,
+    #     )
+    # except ValueError as exc:
+    #     raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    request_agent = build_agent(
+        # provider_url=model_config["url"],
+        # model_name=model_config["model"],
+        api_key=api_key,
+        model_name=model_name,
+        variant=model_variant,
+    )
+
+    history = await asyncio.to_thread(load_session, session["id"])
+
+    result = await request_agent.run(req.message, message_history=history)
+
+    hydrated = await hydrate_chat_response(
+        result.output,
+        result.all_messages(),
+    )
+
+    await asyncio.to_thread(
+        save_session_messages,
+        session["id"],
+        result.all_messages(),
+    )
+
+    return hydrated
 
 
 sessions = {}
@@ -358,14 +895,18 @@ async def chat_web_stream(req: WebChatRequest):
             status_code=400, detail="No API key on file for this provider"
         )
 
+    request_agent = build_agent(
+        provider_url=model_config["url"],
+        api_key=api_key,
+        model_name=model_config["model"],
+        variant=model_config["variant"],
+    )
+
     return StreamingResponse(
         stream(
+            request_agent,
             req.message,
             session_id=req.session_id,
-            provider_url=model_config["url"],
-            api_key=api_key,
-            model_name=model_config["model"],
-            variant=model_config["variant"],
             web=req.web,
         ),
         media_type="text/event-stream",

@@ -43,9 +43,6 @@ providers:
           - high
           - max
 
-
-
-
   dahl:
     url: "https://inference.dahl.global/v1"
     models:
@@ -104,6 +101,16 @@ providers:
           - low
           - high
           - max
+  deepseek:
+    url: "asdfasdf"
+    models:
+      deepseek-v4-flash:
+        variants:
+          - low
+          - high
+          - max
+
+
 
   free:
     url: "http://localhost:20128/v1"

@@ -14,7 +14,7 @@ FastAPI backend + Qdrant vector search + Postgres + aiogram Telegram bot. The Ne
 Importing `server`, `api.chat`, or `search` requires the whole stack and the models:
 
 - `search.py` loads SentenceTransformer + fastembed models and connects to Qdrant at import.
-- `api/chat.py` calls `setup_indexes()` and reads `./skills/turath-index-skill.md` (relative path — run from repo root).
+- `api/chat.py` calls `setup_indexes()` and reads `./skills/turath-index-skill.md` and `./skills/citations.md` (relative paths — run from repo root). Agents are built per request via `build_agent()` (no module-level `agent` global); the LLM emits inline `{fragment|surah:ayah}` markers that `hydrate_chat_response()` turns into the structured `ChatResponse`.
 - `api/providers.py` loads `config/providers.yaml` at import; default path is `/app/config/providers.yaml` (docker). Set `PROVIDERS_CONFIG_PATH` locally or imports fail.
 - `db/connection.py` builds a psycopg2 pool from `DATABASE_*` env at import; needs `.env` + running Postgres.
 
