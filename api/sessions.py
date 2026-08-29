@@ -3,6 +3,7 @@ import json
 import psycopg2
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from api._docs import COMMON_ERROR_RESPONSES
 from db.connection import get_conn
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
@@ -20,6 +21,30 @@ class SessionModelUpdate(BaseModel):
     model_provider: str
     model_name: str
     model_variant: str
+
+
+class SessionOut(BaseModel):
+    """Public view of a session row (never includes the pydantic_message blob)."""
+
+    id: str
+    user_id: str
+    source: str
+    model_provider: str | None = None
+    model_name: str | None = None
+    model_variant: str | None = None
+    is_active: bool
+
+
+class SessionModelUpdateResponse(BaseModel):
+    status: bool
+    message: str
+    session: SessionOut
+
+
+class ResetSessionResponse(BaseModel):
+    status: bool
+    message: str
+    session: SessionOut
 
 
 def _row_to_session(row) -> dict | None:
@@ -41,8 +66,14 @@ SESSION_COLUMNS = (
 )
 
 
-@router.get("/{session_id}")
-async def get_session(session_id: str):
+@router.get(
+    "/{session_id}",
+    summary="Get a session by id",
+    description="Returns the session row without the `pydantic_message` blob.",
+    response_model=SessionOut,
+    responses={404: COMMON_ERROR_RESPONSES[404]},
+)
+async def get_session(session_id: str) -> SessionOut:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -56,8 +87,17 @@ async def get_session(session_id: str):
     return session
 
 
-@router.get("/active/user/{user_id}")
-async def get_active_session(user_id: str):
+@router.get(
+    "/active/user/{user_id}",
+    summary="Get the user's active session",
+    description=(
+        "The one source of truth for what session this user is currently in. "
+        "404 if the user has no active session."
+    ),
+    response_model=SessionOut,
+    responses={404: COMMON_ERROR_RESPONSES[404]},
+)
+async def get_active_session(user_id: str) -> SessionOut:
     """The one source of truth for "what session is this user currently in"."""
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -72,7 +112,16 @@ async def get_active_session(user_id: str):
     return session
 
 
-@router.post("/add")
+@router.post(
+    "/add",
+    summary="Create a new active session for a user",
+    description=(
+        "Returns a single-element array `[{session}]` (pre-existing behavior). "
+        "The caller is responsible for deactivating any prior active session "
+        "first (see `/sessions/reset/{user_id}` for the atomic path)."
+    ),
+    responses={400: COMMON_ERROR_RESPONSES[400]},
+)
 def add_session(req: SessionCreate):
     """Creates a new active session. Caller (backend logic, not the bot) is
     responsible for deactivating any prior active session first when that
@@ -104,8 +153,19 @@ def add_session(req: SessionCreate):
     return (_row_to_session(row),)
 
 
-@router.put("/{session_id}/model")
-def update_session_model(session_id: str, req: SessionModelUpdate):
+@router.put(
+    "/{session_id}/model",
+    summary="Update the model on an existing session",
+    description=(
+        "Used by the `/model` command. Updates the active session's model "
+        "config without creating a new session and without changing `is_active`."
+    ),
+    response_model=SessionModelUpdateResponse,
+    responses={400: COMMON_ERROR_RESPONSES[400], 404: COMMON_ERROR_RESPONSES[404]},
+)
+def update_session_model(
+    session_id: str, req: SessionModelUpdate
+) -> SessionModelUpdateResponse:
     """Used by /model. Updates the active session's config WITHOUT creating
     a new session and WITHOUT touching is_active."""
     with get_conn() as conn:
@@ -184,7 +244,17 @@ def reset_session(user_id: str) -> dict:
     return _row_to_session(new_row)
 
 
-@router.post("/reset/{user_id}")
-async def reset_session_route(user_id: str):
+@router.post(
+    "/reset/{user_id}",
+    summary="Reset a user's conversation",
+    description=(
+        "Atomically deactivates the current active session and creates a new "
+        "one carrying over the same model configuration. The old session and "
+        "its messages are kept in the database."
+    ),
+    response_model=ResetSessionResponse,
+    responses={400: COMMON_ERROR_RESPONSES[400], 404: COMMON_ERROR_RESPONSES[404]},
+)
+async def reset_session_route(user_id: str) -> ResetSessionResponse:
     new_session = reset_session(user_id)
     return {"status": True, "message": "Session reset", "session": new_session}
