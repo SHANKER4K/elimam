@@ -28,7 +28,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.capabilities.hooks import Hooks
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.deepseek import DeepSeekProvider
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
@@ -75,7 +74,6 @@ class WebChatRequest(BaseModel):
     model_variant: str
     session_id: str
     api_key: str
-    web: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -139,18 +137,6 @@ class DetectedCitation(BaseModel):
 
     citation: str = Field(description="Canonical Quran citation, e.g. [2:153].")
 
-    fragment_start: int = Field(
-        ge=0,
-        description=(
-            "Zero-based inclusive start offset in the authoritative ayah text."
-        ),
-    )
-
-    fragment_end: int = Field(
-        gt=0,
-        description=("Zero-based exclusive end offset in the authoritative ayah text."),
-    )
-
     verse_fragment_text: str = Field(
         min_length=1,
         description="Verified Quran text extracted from the Quran collection.",
@@ -164,8 +150,6 @@ class DetectedCitation(BaseModel):
                 f"citation must equal {expected!r} based on surah_number "
                 "and ayah_number"
             )
-        if self.fragment_end <= self.fragment_start:
-            raise ValueError("fragment_end must be greater than fragment_start")
         return self
 
 
@@ -449,8 +433,8 @@ def _extract_marker_requests(raw_text: str) -> tuple[str, list[dict]]:
 def _resolve_fragment(
     ayah_text: str,
     requested_fragment_text: str,
-) -> tuple[int, int, str]:
-    """Locate the requested fragment inside the authoritative ayah.
+) -> str:
+    """Return the verified fragment inside the authoritative ayah.
 
     Falls back to the full verified ayah on a substring miss and logs the
     fallback for observability (tashkīl drift is the common cause).
@@ -459,15 +443,14 @@ def _resolve_fragment(
 
     start = ayah_text.find(requested_fragment_text)
     if start != -1:
-        end = start + len(requested_fragment_text)
-        return start, end, ayah_text[start:end]
+        return ayah_text[start : start + len(requested_fragment_text)]
 
     _fragment_fallback_count += 1
     logger.warning(
         "fragment_not_found_fallback_to_full_ayah",
         extra={"requested_fragment": requested_fragment_text},
     )
-    return 0, len(ayah_text), ayah_text
+    return ayah_text
 
 
 def _validate_marker_syntax(data: str) -> str:
@@ -527,7 +510,7 @@ async def hydrate_chat_response(
         record = quran_cache[citation]
         ayah_text = str(record["text"])
 
-        start, end, verified_fragment = _resolve_fragment(
+        verified_fragment = _resolve_fragment(
             ayah_text, request["requested_fragment_text"]
         )
 
@@ -538,8 +521,6 @@ async def hydrate_chat_response(
                 surah_name=str(record.get("surah", "")),
                 ayah_number=ayah_number,
                 citation=citation,
-                fragment_start=start,
-                fragment_end=end,
                 verse_fragment_text=verified_fragment,
             )
         )
@@ -583,15 +564,9 @@ async def stream(
     request_agent: Agent,
     prompt: str,
     session_id: str,
-    web: bool,
 ):
-    global sessions
 
-    history = (
-        await asyncio.to_thread(load_session, session_id)
-        if not web
-        else sessions.get(session_id, [])
-    )
+    history = await asyncio.to_thread(load_session, session_id)
     saved = False
     try:
         async with request_agent.run_stream_events(
@@ -627,12 +602,9 @@ async def stream(
                         yield sse("message_end", {})
 
                     case AgentRunResultEvent(result=result):
-                        if not web:
-                            await asyncio.to_thread(
-                                save_session_messages, session_id, result.all_messages()
-                            )
-                        else:
-                            sessions[session_id] = result.all_messages()
+                        await asyncio.to_thread(
+                            save_session_messages, session_id, result.all_messages()
+                        )
                         saved = True
                         # `request_agent` outputs plain text; hydrate the
                         # server-constructed fields before emitting.
@@ -654,12 +626,10 @@ async def stream(
 setup_indexes()
 
 with open("./skills/turath-index-skill.md") as file:
-    system_prompt = file.read()
+    turath = file.read()
 
 with open("./skills/citations.md") as file:
     citations = file.read()
-
-combined_system_prompt = system_prompt + "\n\n" + citations
 
 compact_tools = ClearToolResults(max_tokens=70_000)
 compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)
@@ -684,16 +654,15 @@ tools = [
 
 def build_agent(
     *,
-    # provider_url: str,
     api_key: str,
-    model_name: str,
-    variant: str,
+    model_name: str = "deepseek-v4-flash",
+    variant: str = "low",
+    system_prompt: str,
 ) -> Agent:
-    """Build a request-local agent from the session's model configuration.
+    """Build a request-local agent.
 
-    Uses `OpenAIProvider` so any OpenAI-compatible endpoint (DeepSeek,
-    OpenRouter, etc.) works; the per-user API key is passed in explicitly
-    instead of leaking from a module-level global.
+    DeepSeek is the default provider; the per-user API key is passed in
+    explicitly instead of leaking from a module-level global.
     """
     model = OpenAIChatModel(
         model_name,
@@ -708,7 +677,7 @@ def build_agent(
         model,
         name="islamic_scholar_agent",
         model_settings=model_settings,
-        system_prompt=combined_system_prompt,
+        system_prompt=system_prompt,
         output_type=str,
         retries={"output": 3},
         capabilities=capabilities,
@@ -749,36 +718,20 @@ def chat_stream(
             detail="User has no active session",
         )
 
-    model_provider = session["model_provider"]
-    model_name = session["model_name"]
-    model_variant = session["model_variant"]
+    model_name = "deepseek-v4-flash"
+    model_variant = "low"
 
-    if not model_provider or not model_name or not model_variant:
-        raise HTTPException(
-            status_code=409,
-            detail="Active session is missing model configuration",
-        )
-
-    try:
-        model_config = resolve_model_config(
-            provider=model_provider,
-            model=model_name,
-            variant=model_variant,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    api_key = get_decrypted_key(user_id, model_provider)
+    api_key = os.getenv("API_KEY")
     if not api_key:
         raise HTTPException(
             status_code=400, detail="No API key on file for this provider"
         )
 
     request_agent = build_agent(
-        provider_url=model_config["url"],
         api_key=api_key,
-        model_name=model_config["model"],
-        variant=model_config["variant"],
+        model_name=model_name,
+        variant=model_variant,
+        system_prompt=turath,
     )
 
     return StreamingResponse(
@@ -786,7 +739,6 @@ def chat_stream(
             request_agent,
             req.message,
             session_id=session["id"],
-            web=False,
         ),
         media_type="text/event-stream",
     )
@@ -807,21 +759,11 @@ async def chat(
             detail="User has no active session",
         )
 
-    # model_provider = session["model_provider"]
-    # model_name = session["model_name"]
-    # model_variant = session["model_variant"]
-    #
-    model_provider = "deepseek"
+    # DeepSeek is the default provider for this endpoint; the session's
+    # model config is intentionally ignored (single-model deployment).
     model_name = "deepseek-v4-flash"
     model_variant = "low"
 
-    if not model_provider or not model_name or not model_variant:
-        raise HTTPException(
-            status_code=409,
-            detail="Active session is missing model configuration",
-        )
-
-    # api_key = await asyncio.to_thread(get_decrypted_key, user_id, model_provider)
     api_key = os.getenv("API_KEY")
     if not api_key:
         raise HTTPException(
@@ -829,21 +771,11 @@ async def chat(
             detail="No API key on file for this provider",
         )
 
-    # try:
-    #     model_config = resolve_model_config(
-    #         provider=model_provider,
-    #         model=model_name,
-    #         variant=model_variant,
-    #     )
-    # except ValueError as exc:
-    #     raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     request_agent = build_agent(
-        # provider_url=model_config["url"],
-        # model_name=model_config["model"],
         api_key=api_key,
         model_name=model_name,
         variant=model_variant,
+        system_prompt=citations,
     )
 
     history = await asyncio.to_thread(load_session, session["id"])
@@ -862,55 +794,6 @@ async def chat(
     )
 
     return hydrated
-
-
-sessions = {}
-
-
-@router.post("/web")
-async def chat_web_stream(req: WebChatRequest):
-
-    model_provider = req.model_provider
-    model_name = req.model_name
-    model_variant = req.model_variant
-
-    if not model_provider or not model_name or not model_variant:
-        raise HTTPException(
-            status_code=409,
-            detail="Active session is missing model configuration",
-        )
-
-    try:
-        model_config = resolve_model_config(
-            provider=model_provider,
-            model=model_name,
-            variant=model_variant,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    api_key = req.api_key
-    if not api_key:
-        raise HTTPException(
-            status_code=400, detail="No API key on file for this provider"
-        )
-
-    request_agent = build_agent(
-        provider_url=model_config["url"],
-        api_key=api_key,
-        model_name=model_config["model"],
-        variant=model_config["variant"],
-    )
-
-    return StreamingResponse(
-        stream(
-            request_agent,
-            req.message,
-            session_id=req.session_id,
-            web=req.web,
-        ),
-        media_type="text/event-stream",
-    )
 
 
 @router.post("/dense_search")
