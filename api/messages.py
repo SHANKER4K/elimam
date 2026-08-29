@@ -19,7 +19,7 @@ async def get_session_messages(session_id: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, session_id, role, content, metadata, sequence, created_at "
+                "SELECT id, session_id, role, content, sequence, created_at "
                 "FROM messages WHERE session_id = %s ORDER BY sequence ASC",
                 (session_id,),
             )
@@ -30,9 +30,8 @@ async def get_session_messages(session_id: str):
             "session_id": str(r[1]),
             "role": r[2],
             "content": r[3],
-            "metadata": r[4],
-            "sequence": r[5],
-            "created_at": r[6].isoformat() if r[6] else None,
+            "sequence": r[4],
+            "created_at": r[5].isoformat() if r[5] else None,
         }
         for r in rows
     ]

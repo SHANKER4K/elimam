@@ -108,6 +108,34 @@ def save_session_messages(session_id: str, msgs) -> None:
         conn.commit()
 
 
+def _project_message(m) -> tuple[str, str | None, dict]:
+    kind = type(m).__name__
+    role = "assistant" if kind == "ModelResponse" else "user"
+    text = "".join(p.content for p in m.parts if isinstance(p.content, str))
+    metadata = ModelMessagesTypeAdapter.dump_python([m], mode="json")[0]
+    return role, text or None, metadata
+
+
+def append_session_messages(session_id: str, msgs) -> None:
+    if not msgs:
+        return
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(MAX(sequence), 0) FROM messages WHERE session_id = %s",
+                (session_id,),
+            )
+            (start,) = cur.fetchone()
+            for i, m in enumerate(msgs, start=start + 1):
+                role, content, metadata = _project_message(m)
+                cur.execute(
+                    "INSERT INTO messages (session_id, role, content, metadata, sequence) "
+                    "VALUES (%s, %s, %s, %s::jsonb, %s)",
+                    (session_id, role, content, json.dumps(metadata), i),
+                )
+        conn.commit()
+
+
 def get_active_session_row(user_id: str) -> dict | None:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -209,6 +237,9 @@ async def stream(
                     case AgentRunResultEvent(result=result):
                         await asyncio.to_thread(
                             save_session_messages, session_id, result.all_messages()
+                        )
+                        await asyncio.to_thread(
+                            append_session_messages, session_id, result.new_messages()
                         )
                         saved = True
                         yield sse("done", {"output": result.output})
