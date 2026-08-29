@@ -1,5 +1,6 @@
 import psycopg2
 from pydantic import BaseModel
+from api._docs import COMMON_ERROR_RESPONSES
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException
 
@@ -33,8 +34,13 @@ def _row_to_user(row) -> dict | None:
     }
 
 
-@router.get("/{user_id}")
-async def get_user(user_id: str):
+@router.get(
+    "/{user_id}",
+    summary="Get a user by id",
+    response_model=UserOut,
+    responses={404: COMMON_ERROR_RESPONSES[404]},
+)
+async def get_user(user_id: str) -> UserOut:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -48,8 +54,13 @@ async def get_user(user_id: str):
     return user
 
 
-@router.get("/telegram/{telegram_id}")
-async def get_user_by_telegram_id(telegram_id: str):
+@router.get(
+    "/telegram/{telegram_id}",
+    summary="Get a user by Telegram id",
+    response_model=UserOut,
+    responses={404: COMMON_ERROR_RESPONSES[404]},
+)
+async def get_user_by_telegram_id(telegram_id: str) -> UserOut:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -63,8 +74,18 @@ async def get_user_by_telegram_id(telegram_id: str):
     return user
 
 
-@router.put("/telegram/link")
-async def link_telegram(req: User):
+@router.put(
+    "/telegram/link",
+    summary="Link an email to an existing Telegram user",
+    description=(
+        "Looks up the user by `telegram_id` and updates `email`. Note: the "
+        "SQL is `UPDATE ... SET email WHERE telegram_id` (no upsert); the "
+        "returned row reflects the new email."
+    ),
+    response_model=UserOut,
+    responses={400: COMMON_ERROR_RESPONSES[400]},
+)
+async def link_telegram(req: User) -> UserOut:
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
@@ -83,8 +104,17 @@ async def link_telegram(req: User):
     return _row_to_user(row)
 
 
-@router.post("/add")
-def add_user(req: User):
+@router.post(
+    "/add",
+    summary="Upsert a user (create or update by telegram_id)",
+    description=(
+        "If a user with the same `telegram_id` exists, `username` is updated "
+        "only when the new value is non-null; other fields are untouched."
+    ),
+    response_model=UserOut,
+    responses={400: COMMON_ERROR_RESPONSES[400]},
+)
+def add_user(req: User) -> UserOut:
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
