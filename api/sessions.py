@@ -43,13 +43,16 @@ SESSION_COLUMNS = (
 
 @router.get("/{session_id}")
 async def get_session(session_id: str):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT {SESSION_COLUMNS}, pydantic_message FROM sessions WHERE id = %s",
-                (session_id,),
-            )
-            row = cur.fetchone()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {SESSION_COLUMNS}, pydantic_message FROM sessions WHERE id = %s",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+    except psycopg2.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     session = _row_to_session(row)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -59,13 +62,16 @@ async def get_session(session_id: str):
 @router.get("/active/user/{user_id}")
 async def get_active_session(user_id: str):
     """The one source of truth for "what session is this user currently in"."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = %s AND is_active IS TRUE",
-                (user_id,),
-            )
-            row = cur.fetchone()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = %s AND is_active IS TRUE",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+    except psycopg2.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     session = _row_to_session(row)
     if session is None:
         raise HTTPException(status_code=404, detail="No active session")
@@ -100,7 +106,7 @@ def add_session(req: SessionCreate):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
     return (_row_to_session(row),)
 
 
@@ -127,7 +133,7 @@ def update_session_model(session_id: str, req: SessionModelUpdate):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
     if row is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return {
@@ -180,7 +186,7 @@ def reset_session(user_id: str) -> dict:
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
     return _row_to_session(new_row)
 
 

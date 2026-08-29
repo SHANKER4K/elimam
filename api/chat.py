@@ -27,6 +27,7 @@ from pydantic_ai_harness.compaction import (
     ReportContextUsage,
 )
 
+from api.sessions import SessionCreate, add_session, get_session
 from db.connection import get_conn
 
 from search import (
@@ -156,9 +157,7 @@ async def stream(
     api_key: str,
     model_name: str,
     variant: str,
-    web: bool,
 ):
-    global sessions
     provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
     model = OpenAIChatModel(model_name, provider=provider)
     model_settings = OpenAIResponsesModelSettings(
@@ -208,12 +207,9 @@ async def stream(
                         yield sse("message_end", {})
 
                     case AgentRunResultEvent(result=result):
-                        if not web:
-                            await asyncio.to_thread(
-                                save_session_messages, session_id, result.all_messages()
-                            )
-                        else:
-                            sessions[session_id] = result.all_messages()
+                        await asyncio.to_thread(
+                            save_session_messages, session_id, result.all_messages()
+                        )
                         saved = True
                         yield sse("done", {"output": result.output})
     finally:
@@ -318,13 +314,9 @@ def chat_stream(
             api_key=api_key,
             model_name=model_config["model"],
             variant=model_config["variant"],
-            web=False,
         ),
         media_type="text/event-stream",
     )
-
-
-sessions = {}
 
 
 @router.post("/web")
@@ -333,6 +325,23 @@ async def chat_web_stream(req: WebChatRequest):
     model_provider = req.model_provider
     model_name = req.model_name
     model_variant = req.model_variant
+
+    try:
+        session = await asyncio.to_thread(get_session, req.session_id)
+    except HTTPException:
+        session = None
+
+    if session is None:
+        await asyncio.to_thread(
+            add_session,
+            SessionCreate(
+                user_id=req.user_id,
+                source="web",
+                model_provider=model_provider,
+                model_name=model_name,
+                model_variant=model_variant,
+            ),
+        )
 
     if not model_provider or not model_name or not model_variant:
         raise HTTPException(
@@ -361,7 +370,6 @@ async def chat_web_stream(req: WebChatRequest):
             api_key=api_key,
             model_name=model_config["model"],
             variant=model_config["variant"],
-            web=True,
         ),
         media_type="text/event-stream",
     )
