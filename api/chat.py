@@ -819,21 +819,47 @@ async def chat(
     return hydrated
 
 
-@router.post("/dense_search")
+@router.post(
+    "/dense_search",
+    summary="Dense vector search over a Qdrant collection",
+    description=(
+        "Single-vector cosine search using GATE-AraBert-v1. Query params: "
+        "`collection` (quran|hadith|tafsir|books|sunnah), `query_text`, "
+        "`top_k`, `filters`. Returns Qdrant points as "
+        "`[{id, version, score, payload, vector}]`; on failure "
+        "`[{\"error\": \"...\"}]`. Filter keys per collection: see "
+        "`skills/turath-index-skill.md`."
+    ),
+)
 def dense_search_(
     collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
 ) -> list:
     return dense_search(collection, query_text, top_k, filters)
 
 
-@router.post("/sparse_search")
+@router.post(
+    "/sparse_search",
+    summary="BM25 sparse search over a Qdrant collection",
+    description=(
+        "Exact keyword search via fastembed BM25. Same params and response "
+        "shape as `/chat/dense_search`; use for term-heavy queries."
+    ),
+)
 def sparse_search_(
     collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
 ) -> list:
     return sparse_search(collection, query_text, top_k, filters)
 
 
-@router.post("/hybrid_search")
+@router.post(
+    "/hybrid_search",
+    summary="Hybrid dense + sparse search with RRF fusion",
+    description=(
+        "Reciprocal Rank Fusion of dense and sparse candidates. Same params "
+        "as the other search routes plus `pool` (candidates per retriever "
+        "before fusion). Response shape identical to `/chat/dense_search`."
+    ),
+)
 def hybrid_search_(
     collection: str,
     query_text: str,
@@ -844,16 +870,29 @@ def hybrid_search_(
     return hybrid_search(collection, query_text, top_k, pool, filters)
 
 
-@router.post("/hybrid_search_weighted")
+@router.post(
+    "/hybrid_search_weighted",
+    summary="Hybrid search with weighted RRF fusion",
+    description=(
+        "Same as `/chat/hybrid_search` with explicit dense/sparse weights "
+        "passed as `dense_weight` and `sparse_weight` query params (defaults "
+        "0.7 / 0.3). Weights are raw RRF weights — the Qdrant HTTP layer "
+        "rejects `FusionQuery` with `weights`, so this route posts the body "
+        "directly."
+    ),
+)
 def hybrid_search_weighted_(
     collection: str,
     query_text: str,
     top_k: int = 10,
     pool: int = 50,
-    weights: tuple[float, float] = (0.7, 0.3),
+    dense_weight: float = 0.7,
+    sparse_weight: float = 0.3,
     filters: dict | None = None,
 ) -> list:
-    return hybrid_search_weighted(collection, query_text, top_k, pool, weights, filters)
+    return hybrid_search_weighted(
+        collection, query_text, top_k, pool, (dense_weight, sparse_weight), filters
+    )
 
 
 @router.get("/health")
