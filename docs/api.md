@@ -67,8 +67,10 @@ against the authoritative Quran record, and builds `ChatResponse`:
 
 Malformed markers (missing pipe, unclosed brace) raise `ModelRetry` in the
 output validator and the LLM retries up to `retries={"output": 3}` (verified
-in `build_agent`). Persistent failure surfaces as a 422 on `/chat/structured`
-or as a partial stream on `/chat`.
+in `build_agent`); if they persist, the error propagates to the global handler
+as a 500. A different failure — a validly formatted marker whose Quran record
+is missing from the collection — raises a 422 on `/chat/structured` and
+aborts the stream on `/chat`.
 
 ## Errors
 
