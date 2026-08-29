@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, HTTPException, Header
+from api._docs import COMMON_ERROR_RESPONSES
 
 router = APIRouter(prefix="/providers", tags=["Providers"])
 
@@ -138,7 +139,16 @@ def resolve_model_config(
 PROVIDERS = load_providers()
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="List all configured providers and their models",
+    description=(
+        "Returns the validated contents of `config/providers.yaml`. The "
+        "Telegram bot calls this once at startup to build model keyboards. "
+        "Requires `X-Bot-Secret` (the only provider route that is authenticated)."
+    ),
+    responses={401: COMMON_ERROR_RESPONSES[401]},
+)
 async def list_providers(
     x_bot_secret: str | None = Header(default=None, alias="X-Bot-Secret"),
 ) -> dict[str, Any]:
