@@ -1,5 +1,6 @@
 import psycopg2
 from pydantic import BaseModel
+from api._docs import COMMON_ERROR_RESPONSES
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException
 
@@ -14,8 +15,27 @@ class Message(BaseModel):
     sequence: int
 
 
-@router.get("/{session_id}")
-async def get_session_messages(session_id: str):
+class MessageOut(BaseModel):
+    id: str
+    session_id: str
+    role: str
+    content: str
+    metadata: dict = {}
+    sequence: int
+    created_at: str | None = None
+
+
+@router.get(
+    "/{session_id}",
+    summary="List messages in a session, oldest first",
+    description=(
+        "Returns the persisted message history ordered by `sequence`. The "
+        "live `pydantic_message` blob used by the agent lives on the session "
+        "row, not here."
+    ),
+    response_model=list[MessageOut],
+)
+async def get_session_messages(session_id: str) -> list[MessageOut]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -38,8 +58,17 @@ async def get_session_messages(session_id: str):
     ]
 
 
-@router.post("/add")
-def add_message(req: Message):
+@router.post(
+    "/add",
+    summary="Persist a single message",
+    description=(
+        "Internal helper used by tests and migrations. The chat agent writes "
+        "its own history to `sessions.pydantic_message` directly."
+    ),
+    response_model=MessageOut,
+    responses={400: COMMON_ERROR_RESPONSES[400]},
+)
+def add_message(req: Message) -> MessageOut:
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
