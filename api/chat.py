@@ -50,6 +50,7 @@ from search import (
 from api.users import get_or_create_user_by_telegram_id
 from api.keys import get_decrypted_key
 from api.providers import resolve_model_config
+from api._docs import COMMON_ERROR_RESPONSES
 
 logger = logging.getLogger("api.chat")
 
@@ -726,7 +727,35 @@ async def log_compaction(ctx, request_context):
     return request_context
 
 
-@router.post("")
+@router.post(
+    "",
+    summary="Stream a chat response (SSE)",
+    description=(
+        "Streams the agent's response as Server-Sent Events. Event sequence: "
+        "`message_start` → (`text_delta` | `tool` | `tool_result`)* → "
+        "`message_end` → `done` (with the hydrated `ChatResponse`). Full "
+        "protocol in `docs/api.md`."
+    ),
+    responses={
+        200: {
+            "description": "Server-Sent Events stream of agent events",
+            "content": {
+                "text/event-stream": {
+                    "schema": {
+                        "type": "string",
+                        "example": (
+                            "event: text_delta\n"
+                            'data: {"text":"\\u0627\\u0644\\u0633\\u0644\\u0627\\u0645 \\u0639\\u0644\\u064a\\u0643\\u0645"}\n\n'
+                        ),
+                    }
+                }
+            },
+        },
+        400: COMMON_ERROR_RESPONSES[400],
+        401: COMMON_ERROR_RESPONSES[401],
+        409: COMMON_ERROR_RESPONSES[409],
+    },
+)
 def chat_stream(
     req: ChatRequest,
     x_bot_secret: str | None = Header(default=None, alias="X-Bot-Secret"),
@@ -767,7 +796,22 @@ def chat_stream(
     )
 
 
-@router.post("/structured")
+@router.post(
+    "/structured",
+    summary="Get a non-streaming chat response with structured citations",
+    description=(
+        "Returns the final `ChatResponse` after the agent finishes. Same "
+        "hydration rules as the streaming endpoint: inline `{fragment|"
+        "surah:ayah}` markers become verified `[surah:ayah]` citations."
+    ),
+    response_model=ChatResponse,
+    responses={
+        400: COMMON_ERROR_RESPONSES[400],
+        401: COMMON_ERROR_RESPONSES[401],
+        409: COMMON_ERROR_RESPONSES[409],
+        422: COMMON_ERROR_RESPONSES[422],
+    },
+)
 async def chat(
     req: ChatRequest,
     x_bot_secret: str | None = Header(default=None, alias="X-Bot-Secret"),
@@ -895,6 +939,11 @@ def hybrid_search_weighted_(
     )
 
 
-@router.get("/health")
+@router.get(
+    "/health",
+    summary="Liveness probe",
+    description="Returns 200 if the process is up. Does not check downstream services.",
+    response_model=dict,
+)
 async def health():
     return {"status": "ok"}
