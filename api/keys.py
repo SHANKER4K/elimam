@@ -13,6 +13,7 @@ Design notes (per the refactor spec):
 import psycopg2
 import os
 from pydantic import BaseModel
+from api._docs import COMMON_ERROR_RESPONSES
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException
 from cryptography.fernet import Fernet
@@ -50,6 +51,16 @@ class ApiKeyExists(BaseModel):
     has_key: bool
 
 
+class KeyOut(BaseModel):
+    """Metadata view of a stored API key. Never includes the key itself."""
+
+    id: str
+    user_id: str
+    provider: str
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 def _row_to_key_meta(row) -> dict | None:
     if row is None:
         return None
@@ -62,8 +73,13 @@ def _row_to_key_meta(row) -> dict | None:
     }
 
 
-@router.get("/{user_id}/{provider}/exists")
-async def has_key(user_id: str, provider: str):
+@router.get(
+    "/{user_id}/{provider}/exists",
+    summary="Check whether a user has a key for a provider",
+    description="Used by the `/model` command to decide whether to ask for a new key.",
+    response_model=ApiKeyExists,
+)
+async def has_key(user_id: str, provider: str) -> ApiKeyExists:
     """Used by /model to decide whether to ask for a new API key."""
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -75,8 +91,13 @@ async def has_key(user_id: str, provider: str):
     return {"provider": provider, "has_key": row is not None}
 
 
-@router.get("/{user_id}")
-async def list_keys(user_id: str):
+@router.get(
+    "/{user_id}",
+    summary="List a user's stored API keys (metadata only)",
+    description="Never returns the actual key value.",
+    response_model=list[KeyOut],
+)
+async def list_keys(user_id: str) -> list[KeyOut]:
     """Metadata only. Never returns the actual key value."""
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -88,8 +109,17 @@ async def list_keys(user_id: str):
     return [_row_to_key_meta(r) for r in rows]
 
 
-@router.post("/add")
-def add_or_update_key(req: ApiKeyIn):
+@router.post(
+    "/add",
+    summary="Upsert an API key for (user, provider)",
+    description=(
+        "One key per (user, provider). The raw key is Fernet-encrypted at "
+        "write time and never echoed back. Returns metadata only."
+    ),
+    response_model=KeyOut,
+    responses={400: COMMON_ERROR_RESPONSES[400]},
+)
+def add_or_update_key(req: ApiKeyIn) -> KeyOut:
     """Upsert: one key per (user_id, provider). Never logs or echoes the key."""
     with get_conn() as conn:
         try:
