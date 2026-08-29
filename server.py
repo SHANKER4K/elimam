@@ -77,12 +77,24 @@ from api.users import router as users_router
 from api.messages import router as messages_router
 from api.keys import router as keys_router
 from api.providers import router as providers_router
+from api._docs import OPENAPI_TAGS
 
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("server")
 
-app = FastAPI(title="Islamic Scholar API")
+app = FastAPI(
+    title="Islamic Scholar API",
+    version="0.1.0",
+    description=(
+        "Backend for the Islamic scholar agent. Called by the Telegram bot "
+        "and the Next.js UI (`ui/`). Only `/chat`, `/chat/structured` and "
+        "`/providers` are authenticated (see `docs/api.md`)."
+    ),
+    contact={"name": "Elimam"},
+    license_info={"name": "Proprietary"},
+    openapi_tags=OPENAPI_TAGS,
+)
 
 app.add_middleware(
     CORSMiddleware,
