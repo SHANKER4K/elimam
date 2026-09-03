@@ -16,9 +16,6 @@ RUN pip install --prefix=/install --no-cache-dir \
                          torch==2.13.0+cpu \
                          -r requirements.txt
 
-
-RUN pip install --prefix=/intall --no-cache-dir pydantic-ai_harness
-
 # -------------------------
 # Stage 2: Runtime
 # -------------------------
