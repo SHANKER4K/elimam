@@ -42,7 +42,10 @@ SESSION_COLUMNS = (
 
 
 @router.get("/{session_id}")
-async def get_session(session_id: str):
+def get_session(session_id: str):
+    """Sync route (runs in FastAPI's threadpool) so internal callers can use
+    asyncio.to_thread() and get a real result instead of an unawaited
+    coroutine."""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -108,6 +111,37 @@ def add_session(req: SessionCreate):
             conn.rollback()
             raise HTTPException(status_code=500, detail=f"Database error: {e}")
     return (_row_to_session(row),)
+
+
+def create_web_session(session_id: str, req: SessionCreate) -> None:
+    """Insert a web session keyed by the client-generated id, never active.
+
+    The web client owns the conversation id (its URL path segment); we insert
+    under that exact id so message history FKs resolve. is_active=false keeps
+    web conversations out of the one-active-per-user unique index.
+    """
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sessions (id, user_id, source, model_provider, model_name, model_variant, pydantic_message, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, false)
+                    """,
+                    (
+                        session_id,
+                        req.user_id,
+                        req.source,
+                        req.model_provider,
+                        req.model_name,
+                        req.model_variant,
+                        json.dumps([]),
+                    ),
+                )
+            conn.commit()
+        except psycopg2.Error as e:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 
 @router.put("/{session_id}/model")

@@ -7,17 +7,24 @@ from camel_tools.utils.dediac import dediac_ar
 from camel_tools.utils.normalize import normalize_alef_ar
 from dotenv import load_dotenv
 import os
+from functools import lru_cache
 
 load_dotenv()
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 
-print("Loading Model")
-model = SentenceTransformer(
-    "Omartificial-Intelligence-Space/GATE-AraBert-v1", model_kwargs={"dtype": "float16"}
-)
-print("Done")
+#cache the model
+@lru_cache(maxsize=1)
+def load_model(model_name:str):
+    print("Loading Model")
+    model = SentenceTransformer(
+        model_name, model_kwargs={"dtype": "float16"}
+    )
+    print("Done")
+    return model
+    
 
+model = load_model("Omartificial-Intelligence-Space/GATE-AraBert-v1")
 
 # BM25 TF vectors; IDF is applied by Qdrant via Modifier.IDF (collection config)
 sparse_model = SparseTextEmbedding("Qdrant/bm25")
