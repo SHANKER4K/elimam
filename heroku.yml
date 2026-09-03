@@ -1,10 +1,4 @@
 build:
   docker:
     web: Dockerfile
-    worker:
-      dockerfile: telegram_bot/Dockerfile
-      context: ./telegram_bot
-
-run:
-  web: uvicorn server:app --host 0.0.0.0 --port $PORT
-  worker: python main.py
+    worker: telegram_bot/Dockerfile
