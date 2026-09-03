@@ -68,7 +68,7 @@ services:
       - PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
       # Vector search
       - QDRANT_URL=http://qdrant:6333
-      - ENCRYPTION_MASTER_KEY=J8ZvAsmsSCiEg_U25hylZQo7IVTyyAzGfXZY-DjQQ0U=
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
 
       # Database
       - DATABASE_HOST=db
