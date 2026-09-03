@@ -2,11 +2,11 @@ providers:
   opencode:
     url: "https://opencode.ai/zen/v1"
     models:
-      deepseek-v4-flash-free:
-        variants:
-          - low
-          - high
-          - max
+      # deepseek-v4-flash-free:
+      #   variants:
+      #     - low
+      #     - high
+      #     - max
       big-pickle:
         variants:
           - low
@@ -17,31 +17,43 @@ providers:
           - low
           - high
           - max
-      x-preview-f-free:
+      # x-preview-f-free:
+      #   variants:
+      #     - low
+      #     - high
+      #     - max
+      muse-spark-1.2-free:
         variants:
           - low
           - high
           - max
-      muse-spark-1.2-contributor-free:
-        variants:
-          - low
-          - high
-          - max
-      hy3-free:
-        variants:
-          - low
-          - high
-          - max
+      # hy3-free:
+      #   variants:
+      #     - low
+      #     - high
+      #     - max
       nemotron-3-ultra-free:
         variants:
           - low
           - high
           - max
-      laguna-s-2.1-free:
+      nemotron-3.5-lightning-free:
         variants:
           - low
           - high
           - max
+
+      # laguna-s-2.1-free:
+      #   variants:
+      #     - low
+      #     - high
+      #     - max
+      ling-3.0-flash-fin-free:
+        variants:
+          - low
+          - high
+          - max
+
 
 
 

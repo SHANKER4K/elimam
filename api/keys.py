@@ -113,6 +113,39 @@ def add_or_update_key(req: ApiKeyIn):
     return _row_to_key_meta(row)
 
 
+@router.put("/update")
+def update_key(req: ApiKeyIn):
+    """Update an existing API key for (user_id, provider). Raises 404 if it doesn't exist."""
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE api_keys
+                    SET encrypted_key = %s,
+                        updated_at = now()
+                    WHERE user_id = %s AND provider = %s
+                    RETURNING id, user_id, provider, created_at, updated_at
+                    """,
+                    (encrypt(req.api_key), req.user_id, req.provider),
+                )
+                row = cur.fetchone()
+
+            if row is None:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"API key for user '{req.user_id}' and provider '{req.provider}' not found.",
+                )
+
+            conn.commit()
+        except psycopg2.Error as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+
+    return _row_to_key_meta(row)
+
+
 def get_decrypted_key(user_id: str, provider: str) -> str | None:
     """Internal helper for the backend (e.g. /chat) to fetch the raw key.
     NOT exposed as a route - never return this value to a client."""
