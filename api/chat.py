@@ -19,8 +19,7 @@ from pydantic_ai import (
     ModelRequestNode,
     PartStartEvent,
     PartDeltaEvent,
-    PartEndEvent
-    
+    PartEndEvent,
 )
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
@@ -236,16 +235,16 @@ async def stream(
     provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
     model = OpenAIChatModel(model_name, provider=provider)
     model_settings = OpenAIChatModelSettings(
-    temperature=0.5,
-    openai_service_tier='flex',            # not service_tier=
-    openai_reasoning_effort=variant,       # gate this for non-reasoning providers
-)
+        temperature=0.5,
+        openai_service_tier="flex",
+        openai_reasoning_effort=variant,
+    )
 
     agent = Agent(
         model,
         name="islamic_scholar_agent",
         model_settings=model_settings,
-        instructions=system_prompt,
+        system_prompt=system_prompt,
         capabilities=capabilities,
         toolsets=[tools],
         retries=3,
@@ -260,58 +259,88 @@ async def stream(
                 async for node in agent_run:
                     match node:
                         case ModelRequestNode(request=req):
-                            # tool results from the previous CallToolsNode arrive here
                             for part in req.parts:
                                 if isinstance(part, ToolReturnPart):
-                                    yield sse('tool_result', {
-                                        'tool_name': part.tool_name,
-                                        'tool_call_id': part.tool_call_id,
-                                        'content': part.content,
-                                    })
-                            # stream THIS node's model response live
+                                    yield sse(
+                                        "tool_result",
+                                        {
+                                            "tool_name": part.tool_name,
+                                            "tool_call_id": part.tool_call_id,
+                                            "content": part.content,
+                                        },
+                                    )
                             async with node.stream(agent_run.ctx) as events:
                                 async for event in events:
-                                    if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
-                                        yield sse('message_start', {'index': event.index, 'text': event.part.content})
-                                    elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                                        yield sse('text_delta', {'index': event.index, 'text': event.delta.content_delta})
+                                    if isinstance(event, PartStartEvent) and isinstance(
+                                        event.part, TextPart
+                                    ):
+                                        yield sse(
+                                            "message_start",
+                                            {
+                                                "index": event.index,
+                                                "text": event.part.content,
+                                            },
+                                        )
+                                    elif isinstance(
+                                        event, PartDeltaEvent
+                                    ) and isinstance(event.delta, TextPartDelta):
+                                        yield sse(
+                                            "text_delta",
+                                            {
+                                                "index": event.index,
+                                                "text": event.delta.content_delta,
+                                            },
+                                        )
                                     elif isinstance(event, PartEndEvent):
-                                        yield sse('message_end', {'index': event.index})
+                                        yield sse("message_end", {"index": event.index})
 
                         case CallToolsNode(model_response=resp):
                             for part in resp.parts:
                                 if isinstance(part, ToolCallPart):
-                                    yield sse('tool', {
-                                        'text': part.tool_name,
-                                        'tool_call_id': part.tool_call_id,
-                                        'args': part.args_as_dict(),
-                                    })
+                                    yield sse(
+                                        "tool",
+                                        {
+                                            "text": part.tool_name,
+                                            "tool_call_id": part.tool_call_id,
+                                            "args": part.args_as_dict(),
+                                        },
+                                    )
                                 elif isinstance(part, ThinkingPart):
-                                    yield sse('thinking', {
-                                        'text': part.content,
-                                        'id': part.id,
-                                        'provider_name': part.provider_name,
-                                    })
+                                    yield sse(
+                                        "thinking",
+                                        {
+                                            "text": part.content,
+                                            "id": part.id,
+                                            "provider_name": part.provider_name,
+                                        },
+                                    )
 
                         case End(data=result):
                             last_output = result.output
+
+            except StopAsyncIteration:
+                # الـ stream انتهى بشكل طبيعي - لا ترفع الخطأ
+                logger.debug("Stream completed normally")
+                pass
             finally:
-                await asyncio.to_thread(save_session_messages,session_id, agent_run.all_messages())
-                await asyncio.to_thread(append_session_messages, session_id, agent_run.all_messages())
-                    
+                # احفظ الـ messages بس إذا الـ agent_run لسه موجود
+                try:
+                    await asyncio.to_thread(
+                        save_session_messages, session_id, agent_run.all_messages()
+                    )
+                    await asyncio.to_thread(
+                        append_session_messages, session_id, agent_run.all_messages()
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save session: {e}")
+
     except ModelHTTPError as e:
         message = e.body.get("message") if isinstance(e.body, dict) else str(e)
         yield sse("text_delta", {"text": message})
-        # Whatever the agent produced before the error is already persisted
-        # by the last node's checkpoint; nothing to do here.
         raise
     except asyncio.CancelledError:
-        logger.info(
-            "agent_run_cancelled",
-            extra={"session_id": session_id},
-        )
+        logger.info("agent_run_cancelled", extra={"session_id": session_id})
         raise
-
 
     yield sse("done", {"output": last_output})
 

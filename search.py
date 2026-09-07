@@ -2,7 +2,7 @@ import httpx
 import json
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 from camel_tools.utils.dediac import dediac_ar
 from camel_tools.utils.normalize import normalize_alef_ar
 from dotenv import load_dotenv
@@ -13,18 +13,25 @@ load_dotenv()
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 
-#cache the model
+
+# cache the model
 @lru_cache(maxsize=1)
-def load_model(model_name:str):
+def load_model(model_name: str):
     print("Loading Model")
-    model = SentenceTransformer(
-        model_name, model_kwargs={"dtype": "float16"}
-    )
+    model = SentenceTransformer(model_name, model_kwargs={"dtype": "float16"})
     print("Done")
     return model
-    
+
+
+@lru_cache(maxsize=1)
+def ranker_loader(model):
+    return CrossEncoder(
+        model, backend="onnx", model_kwargs={"file_name": "model_int8.onnx"}
+    )
+
 
 model = load_model("Omartificial-Intelligence-Space/GATE-AraBert-v1")
+reranker = ranker_loader("models/gate_reranker_onnx")
 
 # BM25 TF vectors; IDF is applied by Qdrant via Modifier.IDF (collection config)
 sparse_model = SparseTextEmbedding("Qdrant/bm25")

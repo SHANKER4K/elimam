@@ -10,7 +10,6 @@ class Message(BaseModel):
     session_id: str
     role: str
     content: str
-    metadata: dict = {}
     sequence: int
 
 
@@ -44,11 +43,11 @@ def add_message(req: Message):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO messages (session_id, role, content, metadata, sequence)
+                    INSERT INTO messages (session_id, role, content,  sequence)
                     VALUES (%s, %s, %s, %s, %s)
-                    RETURNING id, session_id, role, content, metadata, sequence, created_at
+                    RETURNING id, session_id, role, content, sequence, created_at
                     """,
-                    (req.session_id, req.role, req.content, req.metadata, req.sequence),
+                    (req.session_id, req.role, req.content, req.sequence),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -60,6 +59,5 @@ def add_message(req: Message):
         "session_id": str(row[1]),
         "role": row[2],
         "content": row[3],
-        "metadata": row[4],
-        "sequence": row[5],
+        "sequence": row[4],
     }

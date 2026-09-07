@@ -22,6 +22,7 @@ connection_pool = pg_pool.ThreadedConnectionPool(
     password=db_password,
     host=db_host,
     port=db_port,
+    sslmode="require",
 )
 
 
