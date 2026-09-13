@@ -13,6 +13,7 @@ dependencies = [
   "pydantic-ai",
   "pydantic-harness",
   "fastapi",
+  "logfire[httpx]",
   "fastembed",
   "sentence_transformers",
   "uvicorn",

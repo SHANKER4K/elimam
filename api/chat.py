@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
+import logfire
 from pydantic import BaseModel
 from pydantic_ai import (
     Agent,
@@ -50,11 +51,11 @@ from search import (
     get_books_hadith,
     get_books_tafsir,
     get_books_books,
+    get_books_categories,
     setup_indexes,
     dense_search,
     sparse_search,
     hybrid_search,
-    hybrid_search_weighted,
 )
 from api.users import get_or_create_user_by_telegram_id
 from api.keys import get_decrypted_key
@@ -73,6 +74,8 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # body entirely, per rules #4/#5.
 # ---------------------------------------------------------------------------
 BOT_SHARED_SECRET = os.environ.get("BOT_SHARED_SECRET", "")
+
+setup_indexes()
 
 
 class WebChatRequest(BaseModel):
@@ -120,10 +123,10 @@ tools = FunctionToolset(
         get_books_hadith,
         get_books_tafsir,
         get_books_books,
+        get_books_categories,
         dense_search,
         sparse_search,
         hybrid_search,
-        hybrid_search_weighted,
     ]
 )
 
@@ -152,14 +155,13 @@ def save_session_messages(session_id: str, msgs) -> None:
         conn.commit()
 
 
-def _project_message(m) -> tuple[str, str | None, dict]:
+def _project_message(m) -> tuple[str, str | None]:
     kind = type(m).__name__
     role = "assistant" if kind == "ModelResponse" else "user"
     text = "".join(
         p.content for p in m.parts if isinstance(p, (TextPart, UserPromptPart))
     )
-    metadata = ModelMessagesTypeAdapter.dump_python([m], mode="json")[0]
-    return role, text or None, metadata
+    return role, text or None
 
 
 def append_session_messages(session_id: str, msgs) -> None:
@@ -173,11 +175,11 @@ def append_session_messages(session_id: str, msgs) -> None:
             )
             (start,) = cur.fetchone()
             for i, m in enumerate(msgs, start=start + 1):
-                role, content, metadata = _project_message(m)
+                role, content = _project_message(m)
                 cur.execute(
-                    "INSERT INTO messages (session_id, role, content, metadata, sequence) "
-                    "VALUES (%s, %s, %s, %s::jsonb, %s)",
-                    (session_id, role, content, json.dumps(metadata), i),
+                    "INSERT INTO messages (session_id, role, content, sequence) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (session_id, role, content, i),
                 )
         conn.commit()
 
@@ -499,18 +501,6 @@ def hybrid_search_(
     filters: dict | None = None,
 ) -> list:
     return hybrid_search(collection, query_text, top_k, pool, filters)
-
-
-@router.post("/hybrid_search_weighted")
-def hybrid_search_weighted_(
-    collection: str,
-    query_text: str,
-    top_k: int = 10,
-    pool: int = 50,
-    weights: tuple[float, float] = (0.7, 0.3),
-    filters: dict | None = None,
-) -> list:
-    return hybrid_search_weighted(collection, query_text, top_k, pool, weights, filters)
 
 
 @router.get("/health")

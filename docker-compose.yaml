@@ -77,6 +77,11 @@ services:
       - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-shk123}
       - DATABASE_PORT=5432
 
+      # Opik tracing: logfire exports Pydantic AI spans over OTLP.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS}
+      - OTEL_METRICS_EXPORTER=none
+
       # Security - shared secret must match the telegram service below.
       - BOT_SHARED_SECRET=${BOT_SHARED_SECRET}
       # Fernet key for encrypting api_keys.encrypted_key at rest.

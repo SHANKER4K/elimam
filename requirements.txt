@@ -4,6 +4,7 @@ pydantic
 pydantic-ai
 pydantic-ai_harness
 fastapi
+logfire[httpx]
 fastembed
 sentence_transformers
 uvicorn

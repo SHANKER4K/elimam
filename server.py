@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import uuid
+import logfire
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,15 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from api.chat import router as chat_router
+from api.sessions import router as sessions_router
+from api.users import router as users_router
+from api.messages import router as messages_router
+from api.keys import router as keys_router
+from api.providers import router as providers_router
+from api.search import router as search_router
+from opik.integrations.otel import OpikSpanProcessor
 
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -71,13 +81,6 @@ def _configure_logging():
 
 _configure_logging()
 
-from api.chat import router as chat_router
-from api.sessions import router as sessions_router
-from api.users import router as users_router
-from api.messages import router as messages_router
-from api.keys import router as keys_router
-from api.providers import router as providers_router
-
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("server")
@@ -87,9 +90,16 @@ app = FastAPI(title="Islamic Scholar API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # ponytail: lock to your Next.js origin in prod
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logfire.configure(
+    send_to_logfire=False,
+    additional_span_processors=[OpikSpanProcessor()],
+)
+logfire.instrument_pydantic_ai()
 
 
 @app.middleware("http")
@@ -140,3 +150,4 @@ app.include_router(users_router)
 app.include_router(messages_router)
 app.include_router(keys_router)
 app.include_router(providers_router)
+app.include_router(search_router)
