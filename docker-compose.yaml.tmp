@@ -1,14 +1,65 @@
-
 services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+
+    healthcheck:
+      # qdrant image has no curl/wget; bash /dev/tcp does the job
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  db:
+    image: postgres:16
+    container_name: db
+    restart: unless-stopped
+
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-shk123}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Base schema, applied on first boot of an empty volume.
+      - ./db/drizzle/0000_abandoned_slipstream.sql:/docker-entrypoint-initdb.d/001_conversations.sql:ro
+      # Users/api_keys/sessions refactor migration - also only runs
+      # automatically against a FRESH volume. If reusing an existing
+      # pgdata volume, apply it manually (see README).
+      - ./db/drizzle/0001_users_apikeys_sessions.sql:/docker-entrypoint-initdb.d/002_users_apikeys_sessions.sql:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
-    expose:
-      - "8000"
     build:
       context: .
       dockerfile: dockerfile
     image: elimam:latest
     container_name: backend
     restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
     ports:
       - "8000:8000"
 
@@ -16,14 +67,14 @@ services:
       # Provider config path (shared YAML, mounted below)
       - PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
       # Vector search
-      - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_URL=http://qdrant:6333
       - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
 
       # Database
-      - DATABASE_HOST=${DATABASE_HOST}
-      - DATABASE_USER=${DATABASE_USER}
-      - DATABASE_NAME=${DATABASE_NAME}
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_HOST=db
+      - DATABASE_USER=${POSTGRES_USER:-postgres}
+      - DATABASE_NAME=${POSTGRES_DB:-postgres}
+      - DATABASE_PASSWORD=${POSTGRES_PASSWORD:-shk123}
       - DATABASE_PORT=5432
 
       # Opik tracing: logfire exports Pydantic AI spans over OTLP.
@@ -33,6 +84,8 @@ services:
 
       # Security - shared secret must match the telegram service below.
       - BOT_SHARED_SECRET=${BOT_SHARED_SECRET}
+      # Fernet key for encrypting api_keys.encrypted_key at rest.
+      - API_KEY_ENCRYPTION_KEY=${API_KEY_ENCRYPTION_KEY}
       # Persist model caches across restarts: HF hub cache (GATE-AraBert-v1
       # original) bind-mounted from host, fastembed BM25 in the named volume.
       - HF_HOME=/models/hf
@@ -54,7 +107,7 @@ services:
   telegram:
     build:
       context: ./telegram_bot/
-      dockerfile: Dockerfile
+      dockerfile: dockerfile
 
     image: elimam_bot:latest
     container_name: elimam_bot
@@ -80,24 +133,8 @@ services:
       - BACKEND_SESSION_RESET_PATH=/sessions/reset/{user_id}
       - BACKEND_KEY_EXISTS_PATH=/keys/{user_id}/{provider}/exists
       - BACKEND_KEY_ADD_PATH=/keys/add
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: elimam_nginx
-    restart: unless-stopped
 
-    depends_on:
-      backend:
-        condition: service_healthy
-
-    ports:
-      - "80:80"
-      - "443:443"
-
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./certbot/www:/var/www/certbot:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
 volumes:
   pgdata:
   model_cache:
+
