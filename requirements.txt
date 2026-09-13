@@ -2,7 +2,8 @@ camel-tools
 qdrant_client
 pydantic
 pydantic-ai
-pydantic-ai_harness
+pydantic-ai-harness
+opik
 fastapi
 logfire[httpx]
 fastembed

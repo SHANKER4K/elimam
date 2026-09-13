@@ -5,7 +5,7 @@ services:
       - "8000"
     build:
       context: .
-      dockerfile: dockerfile
+      dockerfile: Dockerfile
     image: elimam:latest
     container_name: backend
     restart: unless-stopped
@@ -17,6 +17,7 @@ services:
       - PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
       # Vector search
       - QDRANT_URL=${QDRANT_URL}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
       - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
 
       # Database
@@ -98,6 +99,22 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./certbot/www:/var/www/certbot:ro
       - ./certbot/conf:/etc/letsencrypt:ro
+
+  omniroute:
+    image: diegosouzapw/omniroute:latest
+    container_name: omniroute
+    restart: unless-stopped
+    stop_grace_period: 40s
+    ports:
+      - "127.0.0.1:20128:20128"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - omniroute-data:/app/data
+      - ./.omniroute:/app/.omniroute # Adjust '/app/.omniroute' if the destination path inside the container is different
+
 volumes:
   pgdata:
   model_cache:
+  omniroute-data:

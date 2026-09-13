@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
   "camel-tools",
-  "qdrant_client",
+  "qdrant-client",
   "telebot",
   "telegramify-markdown",
   "pydantic",
@@ -15,8 +15,9 @@ dependencies = [
   "fastapi",
   "logfire[httpx]",
   "fastembed",
-  "sentence_transformers",
+  "sentence-transformers",
   "uvicorn",
   "psycopg2-binary",
-  "PyYAML>=6.0,<7",
+  "pyyaml>=6.0,<7",
+  "pydantic-ai-harness>=0.1.2",
 ]
