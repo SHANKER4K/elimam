@@ -118,7 +118,7 @@ providers:
           - max
 
   free:
-    url: "http://localhost:20128/v1"
+    url: "http://omniroute:20128/v1"
     models:
       shk-combo:
         variants:
