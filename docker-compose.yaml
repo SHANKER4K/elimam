@@ -13,8 +13,6 @@ services:
     # Reachable on the compose network as http://backend:8000 (nginx/bot).
 
     environment:
-      # Provider config path (shared YAML, mounted below)
-      - PROVIDERS_CONFIG_PATH=/app/config/providers.yaml
       # Vector search
       - QDRANT_URL=${QDRANT_URL}
       - QDRANT_API_KEY=${QDRANT_API_KEY}
@@ -40,7 +38,6 @@ services:
       - XDG_CACHE_HOME=/models/cache
 
     volumes:
-      - ./config/providers.yaml:/app/config/providers.yaml:ro
       - ./skills/turath-index-skill.md:/app/skills/turath-index-skill
       - /home/ismail/.cache/huggingface:/models/hf
       - model_cache:/models

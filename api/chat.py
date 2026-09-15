@@ -60,7 +60,6 @@ from search import (
 )
 from api.users import get_or_create_user_by_telegram_id
 from identity import Unauthorized, current_user_id, resolve_identity
-from api.keys import get_decrypted_key
 from api.providers import resolve_model_config
 
 logger = logging.getLogger("api.chat")
@@ -82,8 +81,6 @@ setup_indexes()
 
 class WebChatRequest(BaseModel):
     message: str
-    # Ignored when an identity was resolved; only a permissive-rollout fallback.
-    user_id: str | None = None
     model_name: str
     model_provider: str
     model_variant: str
@@ -192,7 +189,7 @@ def get_active_session_row(user_id: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, model_provider, model_name, model_variant
+                SELECT id, model_provider, model_name, model_variant, user_provider_id
                 FROM sessions
                 WHERE user_id = %s AND is_active IS TRUE
                 """,
@@ -206,6 +203,7 @@ def get_active_session_row(user_id: str) -> dict | None:
         "model_provider": row[1],
         "model_name": row[2],
         "model_variant": row[3],
+        "user_provider_id": str(row[4]) if row[4] else None,
     }
 
 
@@ -239,7 +237,7 @@ async def stream(
     prompt: str,
     session_id: str,
     provider_url: str,
-    api_key: str,
+    api_key: str | None,
     model_name: str,
     variant: str,
 ):
@@ -399,15 +397,16 @@ def chat_stream(
 
     try:
         model_config = resolve_model_config(
-            provider=model_provider,
-            model=model_name,
-            variant=model_variant,
+            session["user_provider_id"],
+            model_provider,
+            model_name,
+            model_variant,
+            user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    api_key = get_decrypted_key(user_id, model_provider)
-    if not api_key:
+    if model_config["api_key"] is None and model_config["requires_key"]:
         raise HTTPException(
             status_code=400, detail="No API key on file for this provider"
         )
@@ -417,7 +416,7 @@ def chat_stream(
             req.message,
             session_id=session["id"],
             provider_url=model_config["url"],
-            api_key=api_key,
+            api_key=model_config["api_key"],
             model_name=model_config["model"],
             variant=model_config["variant"],
         ),
@@ -428,7 +427,7 @@ def chat_stream(
 @router.post("/web")
 async def chat_web_stream(req: WebChatRequest, request: Request):
 
-    user_id = current_user_id(request, req.user_id)
+    user_id = current_user_id(request)
     model_provider = req.model_provider
     model_name = req.model_name
     model_variant = req.model_variant
@@ -447,6 +446,28 @@ async def chat_web_stream(req: WebChatRequest, request: Request):
         # Do not leak whether the session exists for someone else.
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if not model_provider or not model_name or not model_variant:
+        raise HTTPException(
+            status_code=409,
+            detail="Active session is missing model configuration",
+        )
+
+    # The connection is resolved before the insert so a brand-new session is
+    # pinned to the connection that answered this request.
+    try:
+        model_config = resolve_model_config(
+            session["user_provider_id"] if session else None,
+            model_provider,
+            model_name,
+            model_variant,
+            user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if model_config["api_key"] is None and model_config["requires_key"]:
+        raise HTTPException(400, "API key not set for this provider")
+
     if session is None:
         await asyncio.to_thread(
             create_web_session,
@@ -457,34 +478,16 @@ async def chat_web_stream(req: WebChatRequest, request: Request):
                 model_provider=model_provider,
                 model_name=model_name,
                 model_variant=model_variant,
+                user_provider_id=model_config["user_provider_id"],
             ),
         )
-
-    if not model_provider or not model_name or not model_variant:
-        raise HTTPException(
-            status_code=409,
-            detail="Active session is missing model configuration",
-        )
-
-    try:
-        model_config = resolve_model_config(
-            provider=model_provider,
-            model=model_name,
-            variant=model_variant,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    api_key = get_decrypted_key(user_id, req.model_provider)
-    if api_key is None and req.model_provider != "free":
-        raise HTTPException(400, "API key not set for this provider")
 
     return StreamingResponse(
         stream(
             req.message,
             session_id=req.session_id,
             provider_url=model_config["url"],
-            api_key=api_key,
+            api_key=model_config["api_key"],
             model_name=model_config["model"],
             variant=model_config["variant"],
         ),
