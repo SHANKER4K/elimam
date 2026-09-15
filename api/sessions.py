@@ -1,15 +1,17 @@
 import json
 
 import psycopg2
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from db.connection import get_conn
+from identity import can_access, current_user_id, require_owner
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 
 class SessionCreate(BaseModel):
-    user_id: str
+    # Ignored when an identity was resolved; permissive-rollout fallback only.
+    user_id: str | None = None
     source: str
     model_provider: str | None = None
     model_name: str | None = None
@@ -41,11 +43,10 @@ SESSION_COLUMNS = (
 )
 
 
-@router.get("/{session_id}")
 def get_session(session_id: str):
-    """Sync route (runs in FastAPI's threadpool) so internal callers can use
+    """Internal helper (no auth): sync so internal callers can use
     asyncio.to_thread() and get a real result instead of an unawaited
-    coroutine."""
+    coroutine. The route below adds the ownership check."""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -62,9 +63,19 @@ def get_session(session_id: str):
     return session
 
 
+@router.get("/{session_id}")
+def get_session_route(session_id: str, request: Request):
+    session = get_session(session_id)
+    if not can_access(request, session["user_id"]):
+        # Same answer as an unknown id: do not confirm it exists.
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
 @router.get("/active/user/{user_id}")
-async def get_active_session(user_id: str):
+async def get_active_session(user_id: str, request: Request):
     """The one source of truth for "what session is this user currently in"."""
+    require_owner(request, user_id)
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -82,11 +93,12 @@ async def get_active_session(user_id: str):
 
 
 @router.post("/add")
-def add_session(req: SessionCreate):
+def add_session(req: SessionCreate, request: Request):
     """Creates a new active session. Caller (backend logic, not the bot) is
     responsible for deactivating any prior active session first when that
     matters (see reset_session / create_user_with_session for atomic paths).
     """
+    user_id = current_user_id(request, req.user_id)
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
@@ -97,7 +109,7 @@ def add_session(req: SessionCreate):
                     RETURNING id, user_id, source, model_provider, model_name, model_variant, is_active
                     """,
                     (
-                        req.user_id,
+                        user_id,
                         req.source,
                         req.model_provider,
                         req.model_name,
@@ -145,9 +157,10 @@ def create_web_session(session_id: str, req: SessionCreate) -> None:
 
 
 @router.put("/{session_id}/model")
-def update_session_model(session_id: str, req: SessionModelUpdate):
+def update_session_model(session_id: str, req: SessionModelUpdate, request: Request):
     """Used by /model. Updates the active session's config WITHOUT creating
     a new session and WITHOUT touching is_active."""
+    user_id = current_user_id(request)
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
@@ -158,10 +171,16 @@ def update_session_model(session_id: str, req: SessionModelUpdate):
                         model_name = %s,
                         model_variant = %s,
                         updated_at = now()
-                    WHERE id = %s
+                    WHERE id = %s AND user_id = %s
                     RETURNING id, user_id, source, model_provider, model_name, model_variant, is_active
                     """,
-                    (req.model_provider, req.model_name, req.model_variant, session_id),
+                    (
+                        req.model_provider,
+                        req.model_name,
+                        req.model_variant,
+                        session_id,
+                        user_id,
+                    ),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -225,6 +244,7 @@ def reset_session(user_id: str) -> dict:
 
 
 @router.post("/reset/{user_id}")
-async def reset_session_route(user_id: str):
+async def reset_session_route(user_id: str, request: Request):
+    require_owner(request, user_id)
     new_session = reset_session(user_id)
     return {"status": True, "message": "Session reset", "session": new_session}

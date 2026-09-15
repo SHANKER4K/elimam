@@ -1,7 +1,9 @@
 import psycopg2
 from pydantic import BaseModel
 from db.connection import get_conn
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+
+from identity import require_bot, require_owner
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -34,7 +36,8 @@ def _row_to_user(row) -> dict | None:
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str):
+async def get_user(user_id: str, request: Request):
+    require_owner(request, user_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -49,7 +52,7 @@ async def get_user(user_id: str):
 
 
 @router.get("/telegram/{telegram_id}")
-async def get_user_by_telegram_id(telegram_id: str):
+async def get_user_by_telegram_id(telegram_id: str, request: Request):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -60,16 +63,19 @@ async def get_user_by_telegram_id(telegram_id: str):
     user = _row_to_user(row)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+    require_owner(request, user["id"])
     return user
 
 
 @router.put("/telegram/link")
-async def link_telegram(req: User):
+async def link_telegram(req: User, request: Request):
+    require_bot(request)
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE SET email = %s WHERE telegram_id = %s",
+                    "UPDATE users SET email = %s WHERE telegram_id = %s "
+                    "RETURNING id, username, display_name, telegram_id, email",
                     (
                         req.email,
                         req.telegram_id,
@@ -84,7 +90,8 @@ async def link_telegram(req: User):
 
 
 @router.post("/add")
-def add_user(req: User):
+def add_user(req: User, request: Request):
+    require_bot(request)
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:

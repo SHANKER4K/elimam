@@ -24,7 +24,11 @@ async def cmd_reset(message: Message, backend: BackendClient, settings: Settings
 
         # Atomic on the backend: deactivate current active session + create
         # a new one carrying over the same model configuration, in one call.
-        await backend.reset_session(path_template=settings.session_reset_path, user_id=user_result["id"])
+        await backend.reset_session(
+            path_template=settings.session_reset_path,
+            user_id=user_result["id"],
+            telegram_id=str(user.id),
+        )
     except BackendError:
         await message.answer("حدث خطأ أثناء إعادة ضبط الجلسة.")
         return

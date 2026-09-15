@@ -14,8 +14,10 @@ import psycopg2
 import os
 from pydantic import BaseModel
 from db.connection import get_conn
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from cryptography.fernet import Fernet
+
+from identity import current_user_id, require_owner
 
 router = APIRouter(prefix="/keys", tags=["API Keys"])
 
@@ -40,7 +42,8 @@ def decrypt(stored_value: str) -> str:
 
 
 class ApiKeyIn(BaseModel):
-    user_id: str
+    # Ignored when an identity was resolved; permissive-rollout fallback only.
+    user_id: str | None = None
     provider: str
     api_key: str
 
@@ -63,8 +66,9 @@ def _row_to_key_meta(row) -> dict | None:
 
 
 @router.get("/{user_id}/{provider}/exists")
-async def has_key(user_id: str, provider: str):
+async def has_key(user_id: str, provider: str, request: Request):
     """Used by /model to decide whether to ask for a new API key."""
+    require_owner(request, user_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -76,8 +80,9 @@ async def has_key(user_id: str, provider: str):
 
 
 @router.get("/{user_id}")
-async def list_keys(user_id: str):
+async def list_keys(user_id: str, request: Request):
     """Metadata only. Never returns the actual key value."""
+    require_owner(request, user_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -89,8 +94,9 @@ async def list_keys(user_id: str):
 
 
 @router.post("/add")
-def add_or_update_key(req: ApiKeyIn):
+def add_or_update_key(req: ApiKeyIn, request: Request):
     """Upsert: one key per (user_id, provider). Never logs or echoes the key."""
+    user_id = current_user_id(request, req.user_id)
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
@@ -103,7 +109,7 @@ def add_or_update_key(req: ApiKeyIn):
                             updated_at = now()
                     RETURNING id, user_id, provider, created_at, updated_at
                     """,
-                    (req.user_id, req.provider, encrypt(req.api_key)),
+                    (user_id, req.provider, encrypt(req.api_key)),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -114,8 +120,9 @@ def add_or_update_key(req: ApiKeyIn):
 
 
 @router.put("/update")
-def update_key(req: ApiKeyIn):
+def update_key(req: ApiKeyIn, request: Request):
     """Update an existing API key for (user_id, provider). Raises 404 if it doesn't exist."""
+    user_id = current_user_id(request, req.user_id)
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
@@ -127,7 +134,7 @@ def update_key(req: ApiKeyIn):
                     WHERE user_id = %s AND provider = %s
                     RETURNING id, user_id, provider, created_at, updated_at
                     """,
-                    (encrypt(req.api_key), req.user_id, req.provider),
+                    (encrypt(req.api_key), user_id, req.provider),
                 )
                 row = cur.fetchone()
 
@@ -135,7 +142,7 @@ def update_key(req: ApiKeyIn):
                 conn.rollback()
                 raise HTTPException(
                     status_code=404,
-                    detail=f"API key for user '{req.user_id}' and provider '{req.provider}' not found.",
+                    detail=f"API key for provider '{req.provider}' not found.",
                 )
 
             conn.commit()

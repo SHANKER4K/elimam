@@ -27,6 +27,7 @@ from api.keys import router as keys_router
 from api.providers import router as providers_router
 from api.search import router as search_router
 from db.connection import close_pool
+from identity import AUTH_MODE, Unauthorized, is_protected_path, resolve_identity
 from opik.integrations.otel import OpikSpanProcessor
 
 
@@ -96,14 +97,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Islamic Scholar API", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # ponytail: lock to your Next.js origin in prod
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 logfire.configure(
     send_to_logfire=False,
     additional_span_processors=[OpikSpanProcessor()],
@@ -139,6 +132,57 @@ async def request_logging(request: Request, call_next):
         REQUEST_ID_CONTEXT.reset(token)
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+@app.middleware("http")
+async def identity_middleware(request: Request, call_next):
+    """The one gate for every non-public route. Identity comes from the signed
+    X-User-* headers (set by the Next.js proxy) or the bot's shared secret, and
+    lands on request.state - handlers never trust a body/path user_id."""
+    path = request.url.path
+    if not is_protected_path(path):
+        return await call_next(request)
+
+    # Imported here so identity.py stays importable without the DB stack.
+    from api.users import get_or_create_user_by_telegram_id
+
+    def _lookup(telegram_id: str) -> str:
+        # ponytail: blocking single-index SELECT, bot path only; wrap in
+        # asyncio.to_thread if it ever shows up in request latency.
+        return get_or_create_user_by_telegram_id(telegram_id=telegram_id)["id"]
+
+    try:
+        identity = resolve_identity(
+            request.headers,
+            now=time.time(),
+            user_secret=os.environ.get("USER_SHARED_SECRET", ""),
+            bot_secret=os.environ.get("BOT_SHARED_SECRET", ""),
+            lookup_telegram_user=_lookup,
+        )
+    except Unauthorized:
+        if AUTH_MODE == "enforce":
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        # Temporary rollout aid: pre-migration clients still use body identity.
+        logger.warning("auth_permissive_legacy_identity", extra={"path": path})
+        return await call_next(request)
+
+    request.state.identity = identity
+    request.state.user_id = identity.user_id
+    return await call_next(request)
+
+
+# Added last on purpose: Starlette wraps the most recently added middleware
+# outermost, so CORS stays outside identity and 401s reach the browser with
+# CORS headers attached.
+app.add_middleware(
+    CORSMiddleware,
+    # ponytail: an empty FRONTEND_ORIGIN means no cross-origin browser access -
+    # the desired end state, since the Next proxy is the only browser entry.
+    allow_origins=[o for o in os.environ.get("FRONTEND_ORIGIN", "").split(",") if o],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(Exception)

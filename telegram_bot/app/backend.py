@@ -36,12 +36,7 @@ class BackendClient:
             raise BackendError("BOT_SHARED_SECRET is not configured")
         return {"X-Bot-Secret": self.bot_shared_secret}
 
-    def _identity_headers(
-        self,
-        telegram_id: str,
-        username: str | None = None,
-        display_name: str | None = None,
-    ) -> dict[str, str]:
+    def _identity_headers(self, telegram_id: str) -> dict[str, str]:
         if not self.bot_shared_secret:
             raise BackendError("BOT_SHARED_SECRET is not configured")
 
@@ -87,7 +82,9 @@ class BackendClient:
     async def find_user(self, telegram_id: str, path_template: str) -> dict[str, Any] | None:
         path = path_template.format(telegram_id=telegram_id)
         try:
-            return await self._request_json("GET", path)
+            return await self._request_json(
+                "GET", path, headers=self._identity_headers(telegram_id)
+            )
         except BackendNotFound:
             return None
 
@@ -102,14 +99,17 @@ class BackendClient:
                 "display_name": display_name,
                 "telegram_id": telegram_id,
             },
+            headers=self._identity_headers(telegram_id),
         )
 
     async def get_active_session(
-        self, *, path_template: str, user_id: str
+        self, *, path_template: str, user_id: str, telegram_id: str
     ) -> dict[str, Any] | None:
         path = path_template.format(user_id=user_id)
         try:
-            return await self._request_json("GET", path)
+            return await self._request_json(
+                "GET", path, headers=self._identity_headers(telegram_id)
+            )
         except BackendNotFound:
             return None
 
@@ -118,6 +118,7 @@ class BackendClient:
         *,
         path: str,
         user_id: str,
+        telegram_id: str,
         model_provider: str,
         model_name: str,
         model_variant: str,
@@ -132,6 +133,7 @@ class BackendClient:
                 "model_name": model_name,
                 "model_variant": model_variant,
             },
+            headers=self._identity_headers(telegram_id),
         )
 
     async def update_session_model(
@@ -139,6 +141,7 @@ class BackendClient:
         *,
         path_template: str,
         session_id: str,
+        telegram_id: str,
         model_provider: str,
         model_name: str,
         model_variant: str,
@@ -152,22 +155,40 @@ class BackendClient:
                 "model_name": model_name,
                 "model_variant": model_variant,
             },
+            headers=self._identity_headers(telegram_id),
         )
 
-    async def reset_session(self, *, path_template: str, user_id: str) -> dict[str, Any]:
+    async def reset_session(
+        self, *, path_template: str, user_id: str, telegram_id: str
+    ) -> dict[str, Any]:
         path = path_template.format(user_id=user_id)
-        return await self._request_json("POST", path)
+        return await self._request_json(
+            "POST", path, headers=self._identity_headers(telegram_id)
+        )
 
-    async def key_exists(self, *, path_template: str, user_id: str, provider: str) -> bool:
+    async def key_exists(
+        self, *, path_template: str, user_id: str, provider: str, telegram_id: str
+    ) -> bool:
         path = path_template.format(user_id=user_id, provider=provider)
-        result = await self._request_json("GET", path)
+        result = await self._request_json(
+            "GET", path, headers=self._identity_headers(telegram_id)
+        )
         return bool(result and result.get("has_key"))
 
-    async def store_key(self, *, path: str, user_id: str, provider: str, api_key: str) -> None:
+    async def store_key(
+        self,
+        *,
+        path: str,
+        user_id: str,
+        provider: str,
+        api_key: str,
+        telegram_id: str,
+    ) -> None:
         await self._request_json(
             "POST",
             path,
             json_body={"user_id": user_id, "provider": provider, "api_key": api_key},
+            headers=self._identity_headers(telegram_id),
         )
 
     async def stream_chat(
@@ -185,7 +206,7 @@ class BackendClient:
             "Use block quotes for Quran and hadith instead.\n\n"
             f"{message}"
         )
-        headers = self._identity_headers(telegram_id, username, display_name)
+        headers = self._identity_headers(telegram_id)
 
         try:
             async with self._client.stream(

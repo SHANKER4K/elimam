@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 import uuid
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import logfire
 from pydantic import BaseModel
@@ -58,6 +59,7 @@ from search import (
     hybrid_search,
 )
 from api.users import get_or_create_user_by_telegram_id
+from identity import Unauthorized, current_user_id, resolve_identity
 from api.keys import get_decrypted_key
 from api.providers import resolve_model_config
 
@@ -80,7 +82,8 @@ setup_indexes()
 
 class WebChatRequest(BaseModel):
     message: str
-    user_id: str
+    # Ignored when an identity was resolved; only a permissive-rollout fallback.
+    user_id: str | None = None
     model_name: str
     model_provider: str
     model_variant: str
@@ -210,20 +213,26 @@ def resolve_telegram_caller(
     x_bot_secret: str | None,
     x_telegram_id: str | None,
 ) -> str:
-    """authenticated Telegram user -> users.id, per the spec's resolution
-    chain. Only the bot (which knows BOT_SHARED_SECRET) may set the
-    X-Telegram-Id header; arbitrary clients cannot impersonate a user."""
-    if not BOT_SHARED_SECRET or x_bot_secret != BOT_SHARED_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    if not x_telegram_id:
-        raise HTTPException(status_code=400, detail="Missing Telegram identity")
-
-    user = get_or_create_user_by_telegram_id(
-        telegram_id=x_telegram_id,
-        username=None,
-        display_name=None,
-    )
-    return user["id"]
+    """authenticated Telegram user -> users.id. Only the bot (which knows
+    BOT_SHARED_SECRET) may set the X-Telegram-Id header; arbitrary clients
+    cannot impersonate a user. Delegates to the shared resolver so there is
+    exactly one implementation of the bot branch."""
+    try:
+        identity = resolve_identity(
+            {
+                "X-Bot-Secret": x_bot_secret or "",
+                "X-Telegram-Id": x_telegram_id or "",
+            },
+            now=time.time(),
+            user_secret="",
+            bot_secret=BOT_SHARED_SECRET,
+            lookup_telegram_user=lambda telegram_id: get_or_create_user_by_telegram_id(
+                telegram_id=telegram_id
+            )["id"],
+        )
+    except Unauthorized as exc:
+        raise HTTPException(status_code=401, detail="Unauthorized") from exc
+    return identity.user_id
 
 
 async def stream(
@@ -417,8 +426,9 @@ def chat_stream(
 
 
 @router.post("/web")
-async def chat_web_stream(req: WebChatRequest):
+async def chat_web_stream(req: WebChatRequest, request: Request):
 
+    user_id = current_user_id(request, req.user_id)
     model_provider = req.model_provider
     model_name = req.model_name
     model_variant = req.model_variant
@@ -433,12 +443,16 @@ async def chat_web_stream(req: WebChatRequest):
     except HTTPException:
         session = None
 
+    if session is not None and str(session["user_id"]) != user_id:
+        # Do not leak whether the session exists for someone else.
+        raise HTTPException(status_code=404, detail="Session not found")
+
     if session is None:
         await asyncio.to_thread(
             create_web_session,
             req.session_id,
             SessionCreate(
-                user_id=req.user_id,
+                user_id=user_id,
                 source="web",
                 model_provider=model_provider,
                 model_name=model_name,
@@ -461,7 +475,7 @@ async def chat_web_stream(req: WebChatRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    api_key = get_decrypted_key(req.user_id, req.model_provider)
+    api_key = get_decrypted_key(user_id, req.model_provider)
     if api_key is None and req.model_provider != "free":
         raise HTTPException(400, "API key not set for this provider")
 
@@ -476,31 +490,6 @@ async def chat_web_stream(req: WebChatRequest):
         ),
         media_type="text/event-stream",
     )
-
-
-@router.post("/dense_search")
-def dense_search_(
-    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
-) -> list:
-    return dense_search(collection, query_text, top_k, filters)
-
-
-@router.post("/sparse_search")
-def sparse_search_(
-    collection: str, query_text: str, top_k: int = 10, filters: dict | None = None
-) -> list:
-    return sparse_search(collection, query_text, top_k, filters)
-
-
-@router.post("/hybrid_search")
-def hybrid_search_(
-    collection: str,
-    query_text: str,
-    top_k: int = 10,
-    pool: int = 50,
-    filters: dict | None = None,
-) -> list:
-    return hybrid_search(collection, query_text, top_k, pool, filters)
 
 
 @router.get("/health")

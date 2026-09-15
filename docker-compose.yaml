@@ -9,8 +9,8 @@ services:
     image: elimam:latest
     container_name: backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    # ponytail: no published port - the Next.js proxy is the only entry point.
+    # Reachable on the compose network as http://backend:8000 (nginx/bot).
 
     environment:
       # Provider config path (shared YAML, mounted below)

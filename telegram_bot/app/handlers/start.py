@@ -66,7 +66,9 @@ async def cmd_start(
     if existing:
         try:
             session = await backend.get_active_session(
-                path_template=settings.active_session_path, user_id=existing["id"]
+                path_template=settings.active_session_path,
+                user_id=existing["id"],
+                telegram_id=telegram_id,
             )
         except BackendError:
             session = None
@@ -222,12 +224,14 @@ async def choose_variant(
             user_id=user_id,
             provider=provider,
             api_key=api_key,
+            telegram_id=telegram_id,
         )
         await state.update_data(api_key=None)
 
         await backend.create_session(
             path=settings.session_create_path,
             user_id=user_id,
+            telegram_id=telegram_id,
             model_provider=provider,
             model_name=model,
             model_variant=variant,

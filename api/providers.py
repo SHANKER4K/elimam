@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from pathlib import Path
 from typing import Any
@@ -144,7 +145,11 @@ async def list_providers(
 ) -> dict[str, Any]:
     """Return the full validated provider configuration.
     The Telegram bot calls this once at startup to build keyboards."""
-    if not BOT_SHARED_SECRET or x_bot_secret != BOT_SHARED_SECRET:
+    # /providers stays public to the middleware (the bot fetches the catalog
+    # with X-Bot-Secret only, no X-Telegram-Id), so it keeps its own check.
+    if not BOT_SHARED_SECRET or not x_bot_secret or not hmac.compare_digest(
+        x_bot_secret, BOT_SHARED_SECRET
+    ):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # ponytail: return the already-loaded dict; if the file changed on disk,

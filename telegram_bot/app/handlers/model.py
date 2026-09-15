@@ -76,7 +76,10 @@ async def model_choose_provider(
 
     try:
         has_key = await backend.key_exists(
-            path_template=settings.key_exists_path, user_id=user_id, provider=provider
+            path_template=settings.key_exists_path,
+            user_id=user_id,
+            provider=provider,
+            telegram_id=str(callback.from_user.id),
         )
     except BackendError:
         await callback.message.answer("تعذر التحقق من مفتاح API. حاول مرة أخرى.")
@@ -119,7 +122,11 @@ async def model_receive_api_key(
 
     try:
         await backend.store_key(
-            path=settings.key_add_path, user_id=user_id, provider=provider, api_key=api_key
+            path=settings.key_add_path,
+            user_id=user_id,
+            provider=provider,
+            api_key=api_key,
+            telegram_id=str(message.from_user.id),
         )
     except BackendError:
         await message.answer("تعذر حفظ مفتاح API. حاول مرة أخرى.")
@@ -167,6 +174,7 @@ async def model_choose_variant(
     callback: CallbackQuery, state: FSMContext, backend: BackendClient, settings: Settings
 ) -> None:
     variant = callback.data.split(":", 1)[1]
+    telegram_id = str(callback.from_user.id)
     data = await state.get_data()
     user_id = data["user_id"]
     provider = data.get("provider")
@@ -186,12 +194,15 @@ async def model_choose_variant(
 
     try:
         session = await backend.get_active_session(
-            path_template=settings.active_session_path, user_id=user_id
+            path_template=settings.active_session_path,
+            user_id=user_id,
+            telegram_id=telegram_id,
         )
         if session is None:
             await backend.create_session(
                 path=settings.session_create_path,
                 user_id=user_id,
+                telegram_id=telegram_id,
                 model_provider=provider,
                 model_name=model,
                 model_variant=variant,
@@ -200,6 +211,7 @@ async def model_choose_variant(
             await backend.update_session_model(
                 path_template=settings.session_model_update_path,
                 session_id=session["id"],
+                telegram_id=telegram_id,
                 model_provider=provider,
                 model_name=model,
                 model_variant=variant,
