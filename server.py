@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 import logfire
 
 from fastapi import FastAPI, Request
@@ -25,6 +26,7 @@ from api.messages import router as messages_router
 from api.keys import router as keys_router
 from api.providers import router as providers_router
 from api.search import router as search_router
+from db.connection import close_pool
 from opik.integrations.otel import OpikSpanProcessor
 
 
@@ -85,7 +87,14 @@ _configure_logging()
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("server")
 
-app = FastAPI(title="Islamic Scholar API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    close_pool()
+
+
+app = FastAPI(title="Islamic Scholar API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
