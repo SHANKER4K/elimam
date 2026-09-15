@@ -16,6 +16,7 @@ class SessionCreate(BaseModel):
     model_provider: str | None = None
     model_name: str | None = None
     model_variant: str | None = None
+    user_provider_id: str | None = None
 
 
 class SessionModelUpdate(BaseModel):
@@ -35,11 +36,13 @@ def _row_to_session(row) -> dict | None:
         "model_name": row[4],
         "model_variant": row[5],
         "is_active": row[6],
+        "user_provider_id": str(row[7]) if row[7] else None,
     }
 
 
 SESSION_COLUMNS = (
-    "id, user_id, source, model_provider, model_name, model_variant, is_active"
+    "id, user_id, source, model_provider, model_name, model_variant, is_active, "
+    "user_provider_id"
 )
 
 
@@ -137,8 +140,8 @@ def create_web_session(session_id: str, req: SessionCreate) -> None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO sessions (id, user_id, source, model_provider, model_name, model_variant, pydantic_message, is_active)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, false)
+                    INSERT INTO sessions (id, user_id, source, model_provider, model_name, model_variant, user_provider_id, pydantic_message, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, false)
                     """,
                     (
                         session_id,
@@ -147,6 +150,7 @@ def create_web_session(session_id: str, req: SessionCreate) -> None:
                         req.model_provider,
                         req.model_name,
                         req.model_variant,
+                        req.user_provider_id,
                         json.dumps([]),
                     ),
                 )

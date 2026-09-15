@@ -15,7 +15,7 @@ Importing `server`, `api.chat`, or `search` requires the whole stack and the mod
 
 - `search.py` loads SentenceTransformer + fastembed models and connects to Qdrant at import.
 - `api/chat.py` calls `setup_indexes()` and reads `./skills/turath-index-skill.md` (relative path — run from repo root).
-- `api/providers.py` loads `config/providers.yaml` at import; default path is `/app/config/providers.yaml` (docker). Set `PROVIDERS_CONFIG_PATH` locally or imports fail.
+- `api/providers.py` loads the provider catalog from the `providers` table (the `models` jsonb column) on first use and caches it in-process; importing it needs Postgres, not a config file.
 - `db/connection.py` builds a psycopg2 pool from `DATABASE_*` env at import; needs `.env` + running Postgres.
 
 So unit tests that avoid importing these modules fail fast; anything touching the search/chat layer needs `docker compose up` first.
@@ -33,7 +33,7 @@ Two root manifests disagree: `pyproject.toml` (uv, `uv.lock`, requires-python >=
 ## Auth model
 
 - Backend endpoints take `X-Bot-Secret` (must equal `BOT_SHARED_SECRET`, shared with the bot) and `X-Telegram-Id` headers. Never accept user identity in the request body.
-- API keys are stored per (user, provider) in `api_keys.encrypted_key`; `encrypt()`/`decrypt()` in `api/keys.py` are **not** identity functions — they use Fernet with `os.environ["ENCRYPTION_MASTER_KEY"]` (the module docstring still names the stale seam). Never log or return keys.
+- API keys are stored per (user, provider) in `user_providers.encrypted_key`; `api_keys` is frozen (rollback snapshot for the custom-providers migration) and must not be read or written. `encrypt()`/`decrypt()` in `api/keys.py` are **not** identity functions — they use Fernet with `os.environ["ENCRYPTION_MASTER_KEY"]`. Never log or return keys.
 
 ## Agent wiring
 
