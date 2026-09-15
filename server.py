@@ -25,6 +25,7 @@ from api.users import router as users_router
 from api.messages import router as messages_router
 from api.keys import router as keys_router
 from api.providers import router as providers_router
+from api.me_providers import router as me_providers_router
 from api.search import router as search_router
 from db.connection import close_pool
 from identity import AUTH_MODE, Unauthorized, is_protected_path, resolve_identity
@@ -203,4 +204,5 @@ app.include_router(users_router)
 app.include_router(messages_router)
 app.include_router(keys_router)
 app.include_router(providers_router)
+app.include_router(me_providers_router)
 app.include_router(search_router)
