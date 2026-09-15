@@ -1,3 +1,4 @@
+import os
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, NativeOutput
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIModel
@@ -15,7 +16,7 @@ class Refusal(BaseModel):
 
 
 provider = DeepSeekProvider(
-    api_key="sk-aa1af21fba8146cc9f689caeb906b532",
+    api_key=os.environ["PROVIDER_API_KEY"],
 )
 model = OpenAIChatModel("deepseek-ai/DeepSeek-V4-Flash-0731", provider=provider)
 

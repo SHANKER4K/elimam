@@ -1,3 +1,4 @@
+import os
 # from cryptography.fernet import Fernet
 
 
@@ -20,7 +21,6 @@
 #     return fernet.decrypt(stored_value).decode()
 
 
-# encrypt("sk-KEzLkDC9IkYiDlRRr4KjX0tvoaUsQDNw2gg0b88PgUJTVemSFGGNSOpc9ABZWNqO")
 # decrypt(
 #     "gAAAAABqhs0W2NIVGpRpOWKdPO-dEI-653zqo5NTRYAaNl4KrLAvgDIX7MypMcZfWJEyhPSdWiruHqx2WMlnAnkLIo7yZskSL3RIdDMthYs2iH5bB95FpbtWaA70tE_PJtdp_kE4ylux1bAllcWrSWZ6eeeRHitEcT69GwK1rw9mgNMk_wrQ_Nw="
 # )
@@ -43,7 +43,7 @@ def capital(text:str):
 
 provider = OpenAIProvider(
     base_url="https://opencode.ai/zen/v1",
-    api_key="sk-KEzLkDC9IkYiDlRRr4KjX0tvoaUsQDNw2gg0b88PgUJTVemSFGGNSOpc9ABZWNqO",
+    api_key=os.environ["PROVIDER_API_KEY"],
 )
 model = OpenAIChatModel("nemotron-3-ultra-free", provider=provider)
 
