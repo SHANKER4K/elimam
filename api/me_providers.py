@@ -326,6 +326,23 @@ def _update_connection(user_id: str, connection_id: str, fields: dict[str, Any])
     return bool(changed)
 
 
+def _discard_connection(user_id: str, connection_id: str) -> None:
+    """Undo a create whose discovery step failed.
+
+    A 400 never carries the connection id, so a row saved before the failure
+    can never be cleaned up by the client: it just sits in the settings page as
+    a provider that does not work. Models cascade away with it.
+
+    ponytail: reuse ``_delete_connection`` (ownership predicate included)
+    rather than a second DELETE statement; a failure here is logged and leaves
+    the row, which is no worse than the old behaviour.
+    """
+    try:
+        _delete_connection(user_id, connection_id)
+    except Exception:
+        logger.exception("failed to discard connection after a failed create")
+
+
 def _delete_connection(user_id: str, connection_id: str) -> bool:
     """Delete the user's own connection; provider_models cascade."""
     with _conn() as conn:
@@ -340,13 +357,23 @@ def _delete_connection(user_id: str, connection_id: str) -> bool:
 
 
 def _sync_models(
-    user_id: str, connection_id: str, model_ids: list[str], variants: list[str]
+    user_id: str,
+    connection_id: str,
+    model_ids: list[str],
+    variants: list[str],
+    enabled: bool = True,
 ) -> int:
     """Upsert discovered/catalog models without touching existing rows.
 
     The conflict clause only refreshes ``last_synced_at``: a re-sync must never
     overwrite the user's ``variants``, nor silently re-enable a model they
     disabled. The INSERT..SELECT carries the ownership predicate.
+
+    ``enabled`` applies to newly inserted rows only. Discovery passes False for
+    a builtin provider: ``opencode`` alone advertises 65 models, most unusable
+    on a free account, and enabling them all turns a curated six-model picker
+    into a seventy-model one on a single Sync click. A custom endpoint has no
+    catalog to fall back on, so its discoveries arrive enabled.
     """
     if not model_ids:
         return 0
@@ -357,14 +384,14 @@ def _sync_models(
                 INSERT INTO provider_models
                     (user_provider_id, model_id, display_name, variants, is_custom,
                      enabled, last_synced_at)
-                SELECT up.id, %s, %s, %s, false, true, now()
+                SELECT up.id, %s, %s, %s, false, %s, now()
                 FROM user_providers up
                 WHERE up.id = %s AND up.user_id = %s
                 ON CONFLICT (user_provider_id, model_id) DO UPDATE
                     SET last_synced_at = now()
                 """,
                 [
-                    (model_id, model_id, variants, connection_id, user_id)
+                    (model_id, model_id, variants, enabled, connection_id, user_id)
                     for model_id in model_ids
                 ],
             )
@@ -669,6 +696,7 @@ def _sync_discovered_models(
             connection["id"],
             model_ids,
             _default_variants(connection),
+            enabled=bool(connection["is_custom"]),
         )
     if supported:
         _mark_validated(user_id, connection["id"])
@@ -731,8 +759,10 @@ def connect_provider(
     """Connect a builtin provider, seeding the catalog's models and then
     discovering the endpoint's own list.
 
-    The connection is saved *before* discovery runs, so a wrong key or an
-    unreachable endpoint still leaves a row the user can PATCH.
+    The connection is saved before discovery runs, but a discovery failure
+    deletes it again before the error is raised, so a wrong key never leaves a
+    phantom provider behind. Models discovery finds that are not in the
+    catalog are stored disabled (see ``_sync_models``).
     """
     provider = _catalog_by_id().get(body.provider_id)
     if provider is None:
@@ -765,7 +795,11 @@ def connect_provider(
         )
 
     connection = _require_connection(user_id, connection_id)
-    _sync_discovered_models(user_id, connection, api_key)
+    try:
+        _sync_discovered_models(user_id, connection, api_key)
+    except HTTPException:
+        _discard_connection(user_id, connection_id)
+        raise
     return _out(connection, _provider_models(user_id, connection_id))
 
 
@@ -792,7 +826,11 @@ def add_custom_provider(
     )
 
     connection = _require_connection(user_id, connection_id)
-    _sync_discovered_models(user_id, connection, api_key)
+    try:
+        _sync_discovered_models(user_id, connection, api_key)
+    except HTTPException:
+        _discard_connection(user_id, connection_id)
+        raise
     return _out(connection, _provider_models(user_id, connection_id))
 
 

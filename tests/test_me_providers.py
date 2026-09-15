@@ -177,14 +177,18 @@ def env(monkeypatch):
         store["models"].pop(connection_id, None)
         return True
 
-    def _sync_models(user_id, connection_id, model_ids, variants):
-        _records("sync_models", user_id, connection_id, list(model_ids), list(variants))
+    def _sync_models(user_id, connection_id, model_ids, variants, enabled=True):
+        _records(
+            "sync_models", user_id, connection_id, list(model_ids), list(variants), enabled
+        )
         if store["owners"].get(connection_id) != user_id:
             return 0
         rows = store["models"].setdefault(connection_id, [])
         for model_id in model_ids:
             if not any(row["model_id"] == model_id for row in rows):
-                rows.append(_model_row(model_id, variants=variants))
+                row = _model_row(model_id, variants=variants)
+                row["enabled"] = enabled
+                rows.append(row)
         return len(model_ids)
 
     def _add_model(user_id, connection_id, model_id, display_name, variants):
@@ -592,3 +596,42 @@ def test_missing_model_is_404(env):
         == 404
     )
     assert _client("user-1").delete(f"/me/providers/{CID}/models/nope").status_code == 404
+
+
+def test_discovered_models_on_a_builtin_provider_arrive_disabled(env):
+    """`opencode` advertises 65 models. A Sync click must not flood the picker
+    with models the user cannot use; the catalog's six stay enabled."""
+    _seed(env, CID, "user-1")
+    env["discovery"] = (200, {"data": [{"id": "extra-1"}]})
+    assert _client("user-1").post(f"/me/providers/{CID}/sync").status_code == 200
+    sync = [call for call in env["calls"] if call[0] == "sync_models"][-1]
+    assert sync[5] is False
+    assert env["models"][CID][-1]["enabled"] is False
+
+
+def test_discovered_models_on_a_custom_provider_arrive_enabled(env):
+    """A custom endpoint has no catalog to fall back on, so what discovery
+    finds has to be usable immediately."""
+    _seed(env, CID, "user-1", is_custom=True, provider_id=None, custom_name="Mine")
+    env["discovery"] = (200, {"data": [{"id": "extra-1"}]})
+    assert _client("user-1").post(f"/me/providers/{CID}/sync").status_code == 200
+    sync = [call for call in env["calls"] if call[0] == "sync_models"][-1]
+    assert sync[5] is True
+
+
+def test_a_create_that_fails_discovery_leaves_nothing_behind(env):
+    """The 400 never carries the connection id, so a saved row would be
+    unreachable and would show up as a broken provider in settings."""
+    env["discovery"] = (401, None)
+    response = _client("user-1").post(
+        "/me/providers/custom",
+        json={
+            "name": "Mine",
+            "base_url": "https://llm.example.test/v1",
+            "api_style": "openai_compatible",
+            "api_key": "sk-bad",
+        },
+    )
+    assert response.status_code == 400
+    assert [c for c in env["calls"] if c[0] == "delete_connection"], "row was not discarded"
+    assert env["connections"] == {}
