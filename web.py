@@ -1,3 +1,8 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from pydantic_ai import Agent
 from pydantic_ai.agent.abstract import Instructions
 from pydantic_ai.capabilities import Capability
@@ -21,7 +26,7 @@ from retrieve_function import (
 
 provider = OpenAIProvider(
     base_url="https://opencode.ai/zen/v1",
-    api_key="sk-KEzLkDC9IkYiDlRRr4KjX0tvoaUsQDNw2gg0b88PgUJTVemSFGGNSOpc9ABZWNqO",
+    api_key=os.environ["PROVIDER_API_KEY"],
 )
 model = OpenAIChatModel("deepseek-v4-flash-free", provider=provider)
 

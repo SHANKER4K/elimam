@@ -1,3 +1,8 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from typing import Dict, Any
@@ -12,7 +17,7 @@ import argparse
 
 
 
-access_token = "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"
+access_token = os.environ["HF_TOKEN"]
 
 device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
 # Custom Embedding Function
