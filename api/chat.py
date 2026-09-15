@@ -172,17 +172,22 @@ def append_session_messages(session_id: str, msgs) -> None:
         return
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COALESCE(MAX(sequence), 0) FROM messages WHERE session_id = %s",
-                (session_id,),
-            )
-            (start,) = cur.fetchone()
-            for i, m in enumerate(msgs, start=start + 1):
+            # ponytail: atomic sequence — subquery inside INSERT computes
+            # MAX(sequence)+offset in the same tx, eliminating the fetch-then-insert
+            # race. O(n) one-at-a-time inserts; bulk INSERT if throughput matters.
+            for i, m in enumerate(msgs):
                 role, content = _project_message(m)
                 cur.execute(
-                    "INSERT INTO messages (session_id, role, content, sequence) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (session_id, role, content, i),
+                    """
+                    INSERT INTO messages (session_id, role, content, sequence)
+                    VALUES (
+                        %s, %s,
+                        %s,
+                        (SELECT COALESCE(MAX(sequence), 0) + %s
+                         FROM messages WHERE session_id = %s)
+                    )
+                    """,
+                    (session_id, role, content, i + 1, session_id),
                 )
         conn.commit()
 

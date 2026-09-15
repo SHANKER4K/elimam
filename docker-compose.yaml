@@ -42,6 +42,7 @@ services:
     volumes:
       - ./config/providers.yaml:/app/config/providers.yaml:ro
       - ./skills/turath-index-skill.md:/app/skills/turath-index-skill
+      - ./.env:/app/.env:ro
       - /home/ismail/.cache/huggingface:/models/hf
       - model_cache:/models
 
