@@ -32,7 +32,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.capabilities.hooks import Hooks
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
@@ -102,6 +104,46 @@ def sse(event: str, data):
 system_prompt = ""
 with open("./skills/turath-index-skill.md") as file:
     system_prompt = file.read()
+
+
+def _build_agent(
+    provider_slug: str,
+    model_name: str,
+    provider_url: str,
+    api_key: str | None,
+    variant: str,
+) -> Agent:
+    """Build a PydanticAI Agent for OpenAI, Anthropic, OpenRouter, DeepSeek, or other compatible providers."""
+    if provider_slug in ("anthropic",) or provider_slug.startswith("anthropic"):
+        provider = AnthropicProvider(base_url=provider_url, api_key=api_key)
+        model = AnthropicModel(model_name, provider=provider)
+        model_settings = {}
+    elif provider_slug == "deepseek":
+        provider = DeepSeekProvider(api_key=api_key) if api_key else OpenAIProvider(base_url=provider_url, api_key=api_key)
+        model = OpenAIChatModel(model_name, provider=provider)
+        model_settings = OpenAIChatModelSettings(temperature=0.5)
+    else:
+        # Default to OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Mistral, etc.)
+        provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
+        model = OpenAIChatModel(model_name, provider=provider)
+        
+        settings_kwargs = {"temperature": 0.5}
+        if provider_slug == "openai":
+            settings_kwargs["openai_service_tier"] = "flex"
+            if variant:
+                settings_kwargs["openai_reasoning_effort"] = variant
+        
+        model_settings = OpenAIChatModelSettings(**settings_kwargs)
+
+    return Agent(
+        model,
+        name="islamic_scholar_agent",
+        model_settings=model_settings,
+        system_prompt=system_prompt,
+        capabilities=capabilities,
+        toolsets=[tools],
+        retries=3,
+    )
 
 compact_tools = ClearToolResults(max_tokens=70_000)
 compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)
