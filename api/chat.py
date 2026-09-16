@@ -283,27 +283,18 @@ def resolve_telegram_caller(
 async def stream(
     prompt: str,
     session_id: str,
+    provider_slug: str,
     provider_url: str,
     api_key: str | None,
     model_name: str,
     variant: str,
 ):
-    provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
-    model = OpenAIChatModel(model_name, provider=provider)
-    model_settings = OpenAIChatModelSettings(
-        temperature=0.5,
-        openai_service_tier="flex",
-        openai_reasoning_effort=variant,
-    )
-
-    agent = Agent(
-        model,
-        name="islamic_scholar_agent",
-        model_settings=model_settings,
-        system_prompt=system_prompt,
-        capabilities=capabilities,
-        toolsets=[tools],
-        retries=3,
+    agent = _build_agent(
+        provider_slug=provider_slug,
+        model_name=model_name,
+        provider_url=provider_url,
+        api_key=api_key,
+        variant=variant,
     )
 
     history = await asyncio.to_thread(load_session, session_id)
@@ -462,6 +453,7 @@ def chat_stream(
         stream(
             req.message,
             session_id=session["id"],
+            provider_slug=model_provider,
             provider_url=model_config["url"],
             api_key=model_config["api_key"],
             model_name=model_config["model"],
@@ -533,6 +525,7 @@ async def chat_web_stream(req: WebChatRequest, request: Request):
         stream(
             req.message,
             session_id=req.session_id,
+            provider_slug=model_provider,
             provider_url=model_config["url"],
             api_key=model_config["api_key"],
             model_name=model_config["model"],
