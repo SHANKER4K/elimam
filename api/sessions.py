@@ -1,12 +1,15 @@
 import json
+import logging
 
 import psycopg2
+from pydantic_core.core_schema import float_schema
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from db.connection import get_conn
 from identity import can_access, current_user_id, require_owner
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
+logger = logging.getLogger("api.providers")
 
 
 class SessionCreate(BaseModel):
@@ -36,14 +39,11 @@ def _row_to_session(row) -> dict | None:
         "model_name": row[4],
         "model_variant": row[5],
         "is_active": row[6],
-        "user_provider_id": str(row[7]) if row[7] else None,
+        "user_provider_id": str(row[7]) if len(row) > 7 and row[7] else None,
     }
 
 
-SESSION_COLUMNS = (
-    "id, user_id, source, model_provider, model_name, model_variant, is_active, "
-    "user_provider_id"
-)
+SESSION_COLUMNS = "id, user_id, source, model_provider, model_name, model_variant, is_active, user_provider_id"
 
 
 def get_session(session_id: str):
@@ -60,7 +60,13 @@ def get_session(session_id: str):
                 row = cur.fetchone()
     except psycopg2.Error as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
-    session = _row_to_session(row)
+    try:
+        session = _row_to_session(row)
+    except Exception as e:
+        print("=" * 20, flush=True)
+        print(row, flush=True)
+        print("=" * 20, flush=True)
+        raise f"{e}, Here is the problem ,{row}"
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -106,10 +112,10 @@ def add_session(req: SessionCreate, request: Request):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     INSERT INTO sessions (user_id, source, model_provider, model_name, model_variant, pydantic_message, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s, true)
-                    RETURNING id, user_id, source, model_provider, model_name, model_variant, is_active
+                    RETURNING {SESSION_COLUMNS}
                     """,
                     (
                         user_id,
@@ -169,14 +175,14 @@ def update_session_model(session_id: str, req: SessionModelUpdate, request: Requ
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     UPDATE sessions
                     SET model_provider = %s,
                         model_name = %s,
                         model_variant = %s,
                         updated_at = now()
                     WHERE id = %s AND user_id = %s
-                    RETURNING id, user_id, source, model_provider, model_name, model_variant, is_active
+                    RETURNING {SESSION_COLUMNS}
                     """,
                     (
                         req.model_provider,
@@ -225,10 +231,10 @@ def reset_session(user_id: str) -> dict:
                 )
 
                 cur.execute(
-                    """
+                    f"""
                     INSERT INTO sessions (user_id, source, model_provider, model_name, model_variant, pydantic_message, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s, true)
-                    RETURNING id, user_id, source, model_provider, model_name, model_variant, is_active
+                    RETURNING {SESSION_COLUMNS}
                     """,
                     (
                         user_id,

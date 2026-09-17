@@ -118,6 +118,51 @@ async def model_choose_provider(
     await callback.answer()
 
 
+@router.message(ModelChange.api_key, F.text)
+async def model_receive_api_key(
+    message: Message, state: FSMContext, backend: BackendClient
+) -> None:
+    """First key for a builtin provider: connect it, which stores the key and
+    seeds/discovers its models in the same call."""
+    api_key = message.text.strip()
+    if not api_key:
+        await message.answer("أرسل مفتاح API صالحًا.")
+        return
+
+    data = await state.get_data()
+    provider = data.get("provider")
+    providers = data.get("providers", {})
+    telegram_id = str(message.from_user.id)
+
+    if not provider:
+        await state.clear()
+        await message.answer("انتهت صلاحية العملية. استخدم الأمر /model مجددًا.")
+        return
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    try:
+        catalog = (await backend.list_my_providers(telegram_id)).get("catalog", [])
+        provider_row = next((p for p in catalog if p["slug"] == provider), None)
+        if provider_row is None:
+            raise BackendError(f"مزود خدمة غير معروف: {provider}")
+        await backend.connect_provider(
+            telegram_id, provider_row["id"], api_key=api_key
+        )
+    except BackendError as exc:
+        await message.answer(f"تعذر حفظ مفتاح API: {exc}")
+        return
+
+    await state.set_state(ModelChange.model)
+    await message.answer(
+        f"مزود الخدمة: {provider}\n\nاختر نموذجًا:",
+        reply_markup=models_keyboard(providers, provider),
+    )
+
+
 @router.callback_query(ModelChange.model, F.data == "update_key")
 async def model_request_key_update(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ModelChange.update_api_key)
@@ -386,7 +431,7 @@ async def manage_provider_sync(
 ) -> None:
     cid = callback.data.split(":", 2)[2]
     try:
-        await backend.sync_provider(cid)
+        await backend.sync_provider(str(callback.from_user.id), cid)
         await callback.answer("تمت مزامنة النماذج بنجاح ✅", show_alert=True)
     except BackendError as exc:
         await callback.answer(f"فشلت المزامنة: {str(exc)}", show_alert=True)
@@ -397,7 +442,7 @@ async def manage_provider_delete(
 ) -> None:
     cid = callback.data.split(":", 2)[2]
     try:
-        await backend.delete_provider(cid)
+        await backend.delete_provider(str(callback.from_user.id), cid)
         await callback.message.edit_text("تم حذف الاتصال بنجاح. يمكنك إضافة مزود جديد باستخدام /model.")
         await callback.answer()
     except BackendError as exc:

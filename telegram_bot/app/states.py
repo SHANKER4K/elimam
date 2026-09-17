@@ -13,16 +13,10 @@ class ModelChange(StatesGroup):
     api_key = State()
     model = State()
     variant = State()
+    # Custom provider wizard: name -> url -> style -> key.
     custom_name = State()
     custom_url = State()
     custom_style = State()
     custom_api_key = State()
+    # Replacing the key on an existing connection.
     update_api_key = State()
-    custom_name = State()
-    custom_url = State()
-    custom_style = State()
-    custom_key = State()
-    update_key = State()
-    custom_name = State()
-    custom_url = State()
-    custom_style = State()
