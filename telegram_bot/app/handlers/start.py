@@ -13,12 +13,12 @@ router = Router()
 
 
 def providers_keyboard(providers: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=name, callback_data=f"provider:{name}")]
-            for name in providers
-        ]
-    )
+    buttons = [
+        [InlineKeyboardButton(text=name, callback_data=f"provider:{name}")]
+        for name in providers
+    ]
+    buttons.append([InlineKeyboardButton(text="➕ Add Custom", callback_data="provider:custom")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def models_keyboard(providers: dict, provider: str) -> InlineKeyboardMarkup:
