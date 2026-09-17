@@ -5,7 +5,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
+
+load_dotenv(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+)
 
 from db.connection import get_conn
 
@@ -16,12 +19,18 @@ PROVIDERS_TO_SEED = [
         "api_style": "openai_compatible",
         "default_base_url": "https://api.openai.com/v1",
         "requires_key": True,
-        "default_variants": ["low", "medium", "high"],
+        "default_variants": ["none", "low", "medium", "high", "xhigh", "max"],
         "models": {
-            "gpt-4o": {"variants": ["low", "medium", "high"]},
-            "gpt-4o-mini": {"variants": ["low", "medium", "high"]},
-            "o1": {"variants": ["low", "medium", "high"]},
-            "o3-mini": {"variants": ["low", "medium", "high"]},
+            "gpt-5.6": {"variants": ["none", "low", "medium", "high", "xhigh", "max"]},
+            "gpt-5.6-sol": {
+                "variants": ["none", "low", "medium", "high", "xhigh", "max"]
+            },
+            "gpt-5.6-terra": {
+                "variants": ["none", "low", "medium", "high", "xhigh", "max"]
+            },
+            "gpt-5.6-luna": {
+                "variants": ["none", "low", "medium", "high", "xhigh", "max"]
+            },
         },
     },
     {
@@ -30,11 +39,17 @@ PROVIDERS_TO_SEED = [
         "api_style": "anthropic_compatible",
         "default_base_url": "https://api.anthropic.com/v1",
         "requires_key": True,
-        "default_variants": ["low", "high"],
+        "default_variants": ["low", "medium", "high", "max"],
         "models": {
-            "claude-3-5-sonnet-20241022": {"variants": ["low", "high"]},
-            "claude-3-5-haiku-20241022": {"variants": ["low", "high"]},
-            "claude-3-opus-20240229": {"variants": ["low", "high"]},
+            "claude-opus-5": {"variants": ["low", "medium", "high", "max"]},
+            "claude-sonnet-5": {"variants": ["low", "medium", "high", "max"]},
+            "claude-fable-5": {"variants": ["low", "medium", "high", "max"]},
+            "claude-mythos-5": {"variants": ["low", "medium", "high", "max"]},
+            "claude-opus-4-8": {"variants": ["low", "medium", "high", "max"]},
+            "claude-opus-4-7": {"variants": ["low", "medium", "high", "max"]},
+            "claude-opus-4-6": {"variants": ["low", "medium", "high", "max"]},
+            "claude-sonnet-4-6": {"variants": ["low", "medium", "high", "max"]},
+            "claude-haiku-4-5-20251001": {"variants": ["low", "medium", "high", "max"]},
         },
     },
     {
@@ -43,10 +58,10 @@ PROVIDERS_TO_SEED = [
         "api_style": "openai_compatible",
         "default_base_url": "https://api.deepseek.com/v1",
         "requires_key": True,
-        "default_variants": ["low", "high"],
+        "default_variants": ["none", "low", "high", "max"],
         "models": {
-            "deepseek-chat": {"variants": ["low", "high"]},
-            "deepseek-reasoner": {"variants": ["low", "high"]},
+            "deepseek-flash": {"variants": ["none", "low", "high", "max"]},
+            "deepseek-v4-pro": {"variants": ["none", "low", "high", "max"]},
         },
     },
     {
@@ -55,12 +70,10 @@ PROVIDERS_TO_SEED = [
         "api_style": "openai_compatible",
         "default_base_url": "https://openrouter.ai/api/v1",
         "requires_key": True,
-        "default_variants": ["low", "high"],
+        "default_variants": ["low", "medium", "high", "xhigh", "max"],
         "models": {
-            "anthropic/claude-3.5-sonnet": {"variants": ["low", "high"]},
-            "openai/gpt-4o": {"variants": ["low", "high"]},
-            "deepseek/deepseek-chat": {"variants": ["low", "high"]},
-            "meta-llama/llama-3.3-70b-instruct": {"variants": ["low", "high"]},
+            "openrouter/auto": {"variants": ["low", "medium", "high", "xhigh", "max"]},
+            "openrouter/free": {"variants": ["none"]},
         },
     },
     {
@@ -77,6 +90,7 @@ PROVIDERS_TO_SEED = [
         },
     },
 ]
+
 
 def seed_providers():
     print("Seeding providers into database...")
@@ -109,6 +123,7 @@ def seed_providers():
                 print(f"Upserted provider: {p['name']} ({p['slug']})")
         conn.commit()
     print("Provider seeding completed successfully.")
+
 
 if __name__ == "__main__":
     seed_providers()
