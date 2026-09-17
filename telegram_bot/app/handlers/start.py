@@ -219,12 +219,14 @@ async def choose_variant(
         )
         user_id = user_result["id"]
 
-        await backend.store_key(
-            path=settings.key_add_path,
-            user_id=user_id,
-            provider=provider,
-            api_key=api_key,
-            telegram_id=telegram_id,
+        provider_id = await backend.catalog_provider_id(telegram_id, provider)
+        if provider_id is None:
+            raise BackendError(f"مزود خدمة غير معروف: {provider}")
+        # Connect rather than the deprecated /keys/add shim: it stores the key
+        # and seeds the provider's models in the same call, and hands back the
+        # connection id the session must carry.
+        connection = await backend.connect_provider(
+            telegram_id, provider_id, api_key=api_key
         )
         await state.update_data(api_key=None)
 
@@ -235,6 +237,7 @@ async def choose_variant(
             model_provider=provider,
             model_name=model,
             model_variant=variant,
+            user_provider_id=connection["id"],
         )
     except BackendError:
         await callback.message.answer("تعذر حفظ إعدادات الحساب. تحقق من بياناتك وحاول مرة أخرى.")

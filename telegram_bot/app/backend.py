@@ -122,17 +122,21 @@ class BackendClient:
         model_provider: str,
         model_name: str,
         model_variant: str,
+        user_provider_id: str | None = None,
     ) -> dict[str, Any]:
+        json_body = {
+            "user_id": user_id,
+            "source": "telegram",
+            "model_provider": model_provider,
+            "model_name": model_name,
+            "model_variant": model_variant,
+        }
+        if user_provider_id is not None:
+            json_body["user_provider_id"] = user_provider_id
         return await self._request_json(
             "POST",
             path,
-            json_body={
-                "user_id": user_id,
-                "source": "telegram",
-                "model_provider": model_provider,
-                "model_name": model_name,
-                "model_variant": model_variant,
-            },
+            json_body=json_body,
             headers=self._identity_headers(telegram_id),
         )
 
@@ -145,18 +149,48 @@ class BackendClient:
         model_provider: str,
         model_name: str,
         model_variant: str,
+        user_provider_id: str | None = None,
     ) -> dict[str, Any]:
         path = path_template.format(session_id=session_id)
+        json_body = {
+            "model_provider": model_provider,
+            "model_name": model_name,
+            "model_variant": model_variant,
+        }
+        if user_provider_id is not None:
+            json_body["user_provider_id"] = user_provider_id
         return await self._request_json(
             "PUT",
             path,
-            json_body={
-                "model_provider": model_provider,
-                "model_name": model_name,
-                "model_variant": model_variant,
-            },
+            json_body=json_body,
             headers=self._identity_headers(telegram_id),
         )
+
+    async def catalog_provider_id(self, telegram_id: str, provider_slug: str) -> int | None:
+        """The catalog id for a builtin provider, or None.
+
+        `/providers` (the bot's keyboard source) is keyed by slug and carries
+        no id, but `/me/providers` needs one to connect.
+        """
+        payload = await self.list_my_providers(telegram_id)
+        for provider in payload.get("catalog") or []:
+            if provider.get("slug") == provider_slug:
+                return provider.get("id")
+        return None
+
+    async def connection_for_provider(
+        self, telegram_id: str, provider_slug: str
+    ) -> dict[str, Any] | None:
+        """The caller's own connection to a provider, builtin or custom.
+
+        Matched by slug, falling back to the display name: a custom connection
+        has no slug, so its name is the only key it has.
+        """
+        payload = await self.list_my_providers(telegram_id)
+        for connection in payload.get("connections") or []:
+            if (connection.get("slug") or connection.get("name")) == provider_slug:
+                return connection
+        return None
 
     async def reset_session(
         self, *, path_template: str, user_id: str, telegram_id: str

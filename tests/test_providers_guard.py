@@ -17,6 +17,20 @@ SOURCE = (Path(__file__).resolve().parent.parent / "api" / "providers.py").read_
 )
 
 
+def test_custom_connections_survive_the_provider_join():
+    """A custom connection has `provider_id IS NULL`.
+
+    An inner `JOIN providers` drops its row, so `resolve_model_config` raised
+    "Unknown model provider" for every custom endpoint: the user could add one
+    but no request could ever use it.
+    """
+    assert not re.search(r"(?<!LEFT )JOIN providers", SOURCE), (
+        "providers must be LEFT JOINed: an inner join hides custom "
+        "connections (provider_id IS NULL)"
+    )
+    assert SOURCE.count("LEFT JOIN providers p ON p.id = up.provider_id") == 2
+
+
 def test_connection_lookup_filters_on_owner():
     assert "FROM user_providers" in SOURCE
     lookups = re.findall(r"FROM user_providers up.*?\([^)]*\)", SOURCE, re.DOTALL)

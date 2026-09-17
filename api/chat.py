@@ -87,6 +87,10 @@ class WebChatRequest(BaseModel):
     model_provider: str
     model_variant: str
     session_id: str
+    # The caller's connection to `model_provider`. Builtin providers can also be
+    # resolved by slug, but a custom connection has no slug, so a brand-new
+    # web session must name it explicitly.
+    user_provider_id: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -495,7 +499,7 @@ async def chat_web_stream(req: WebChatRequest, request: Request):
     # pinned to the connection that answered this request.
     try:
         model_config = resolve_model_config(
-            session["user_provider_id"] if session else None,
+            session["user_provider_id"] if session else req.user_provider_id,
             model_provider,
             model_name,
             model_variant,

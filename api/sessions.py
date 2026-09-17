@@ -26,6 +26,9 @@ class SessionModelUpdate(BaseModel):
     model_provider: str
     model_name: str
     model_variant: str
+    # Which of the caller's connections pays for this model. Required to reach
+    # a custom connection, which has no catalog slug to fall back to.
+    user_provider_id: str | None = None
 
 
 def _row_to_session(row) -> dict | None:
@@ -113,8 +116,8 @@ def add_session(req: SessionCreate, request: Request):
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    INSERT INTO sessions (user_id, source, model_provider, model_name, model_variant, pydantic_message, is_active)
-                    VALUES (%s, %s, %s, %s, %s, %s, true)
+                    INSERT INTO sessions (user_id, source, model_provider, model_name, model_variant, user_provider_id, pydantic_message, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, true)
                     RETURNING {SESSION_COLUMNS}
                     """,
                     (
@@ -123,6 +126,7 @@ def add_session(req: SessionCreate, request: Request):
                         req.model_provider,
                         req.model_name,
                         req.model_variant,
+                        req.user_provider_id,
                         json.dumps([]),
                     ),
                 )
@@ -180,6 +184,7 @@ def update_session_model(session_id: str, req: SessionModelUpdate, request: Requ
                     SET model_provider = %s,
                         model_name = %s,
                         model_variant = %s,
+                        user_provider_id = COALESCE(%s, user_provider_id),
                         updated_at = now()
                     WHERE id = %s AND user_id = %s
                     RETURNING {SESSION_COLUMNS}
@@ -188,6 +193,7 @@ def update_session_model(session_id: str, req: SessionModelUpdate, request: Requ
                         req.model_provider,
                         req.model_name,
                         req.model_variant,
+                        req.user_provider_id,
                         session_id,
                         user_id,
                     ),
@@ -232,8 +238,8 @@ def reset_session(user_id: str) -> dict:
 
                 cur.execute(
                     f"""
-                    INSERT INTO sessions (user_id, source, model_provider, model_name, model_variant, pydantic_message, is_active)
-                    VALUES (%s, %s, %s, %s, %s, %s, true)
+                    INSERT INTO sessions (user_id, source, model_provider, model_name, model_variant, user_provider_id, pydantic_message, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, true)
                     RETURNING {SESSION_COLUMNS}
                     """,
                     (
@@ -242,6 +248,7 @@ def reset_session(user_id: str) -> dict:
                         current_session["model_provider"],
                         current_session["model_name"],
                         current_session["model_variant"],
+                        current_session["user_provider_id"],
                         json.dumps([]),
                     ),
                 )

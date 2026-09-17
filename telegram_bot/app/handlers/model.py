@@ -145,17 +145,18 @@ async def model_receive_api_key(
         pass
 
     try:
-        catalog = (await backend.list_my_providers(telegram_id)).get("catalog", [])
-        provider_row = next((p for p in catalog if p["slug"] == provider), None)
-        if provider_row is None:
+        provider_id = await backend.catalog_provider_id(telegram_id, provider)
+        if provider_id is None:
             raise BackendError(f"مزود خدمة غير معروف: {provider}")
-        await backend.connect_provider(
-            telegram_id, provider_row["id"], api_key=api_key
+        connection = await backend.connect_provider(
+            telegram_id, provider_id, api_key=api_key
         )
     except BackendError as exc:
         await message.answer(f"تعذر حفظ مفتاح API: {exc}")
         return
 
+    # Pinned on the session so a custom connection (no catalog slug) resolves.
+    await state.update_data(user_provider_id=connection["id"])
     await state.set_state(ModelChange.model)
     await message.answer(
         f"مزود الخدمة: {provider}\n\nاختر نموذجًا:",
@@ -171,11 +172,23 @@ async def model_request_key_update(callback: CallbackQuery, state: FSMContext) -
 
 
 @router.callback_query(ModelChange.model, F.data == "proceed_to_models")
-async def model_proceed_to_models(callback: CallbackQuery, state: FSMContext) -> None:
+async def model_proceed_to_models(
+    callback: CallbackQuery, state: FSMContext, backend: BackendClient
+) -> None:
     data = await state.get_data()
     providers = data.get("providers", {})
     provider = data.get("provider")
-    
+
+    try:
+        connection = await backend.connection_for_provider(
+            str(callback.from_user.id), provider
+        )
+    except BackendError:
+        connection = None
+    if connection:
+        # Builtin providers also resolve by slug; a custom one needs this id.
+        await state.update_data(user_provider_id=connection["id"])
+
     await callback.message.edit_text(f"مزود الخدمة: {provider}\n\nاختر نموذجًا:")
     await callback.message.answer(
         "اختر نموذجًا:", reply_markup=models_keyboard(providers, provider)
@@ -267,14 +280,34 @@ async def model_custom_api_key(
         await message.answer(f"تعذر إضافة مزود مخصص: {str(exc)}")
         return
 
-    await state.clear()
+    # The wizard validates models and variants against the state's catalog, so a
+    # custom connection has to be injected under its own name: it has no slug.
+    custom_name = connection.get("name") or name
+    custom_models = {
+        model["modelId"]: {"variants": model["variants"]}
+        for model in (connection.get("models") or [])
+        if model.get("enabled")
+    }
+    await state.update_data(
+        providers={**data.get("providers", {}), custom_name: {"models": custom_models}},
+        provider=custom_name,
+        user_provider_id=connection["id"],
+    )
+
+    if not custom_models:
+        await message.answer(
+            f"تم إضافة مزود الخدمة: {custom_name}\n\n"
+            "لم يُعثر على أي نموذج على هذا العنوان. تأكد من صحة العنوان أو أضف النموذج يدويًا من الويب."
+        )
+        return
+
+    await state.set_state(ModelChange.model)
     await message.answer(
-        f"تم إضافة مزود مخصص بنجاح: {name}\n\n" +
-        f"عنوان: {url}\n" +
-        f"نمط واجهة: {api_style}\n" +
-        (f"مفتاح API: {api_key[:4]}..." if api_key else "لا يوجد مفتاح API") +
-        "\n\nاختر نموذجًا من القائمة التالية:",
-        reply_markup=models_keyboard({"custom": {"models": connection.get("models", {})}}, "custom"),
+        f"تم إضافة مزود مخصص بنجاح: {custom_name}\n\n"
+        f"عنوان: {url}\n"
+        f"نمط واجهة: {api_style}\n\n"
+        "اختر نموذجًا من القائمة التالية:",
+        reply_markup=models_keyboard({custom_name: {"models": custom_models}}, custom_name),
     )
 
 @router.message(ModelChange.update_api_key, F.text)
@@ -301,11 +334,7 @@ async def model_update_api_key(
         pass
 
     try:
-        # Find connection id for the provider
-        my_providers = await backend.list_my_providers(telegram_id)
-        connections = my_providers.get("connections", [])
-        connection = next((c for c in connections if c["slug"] == provider), None)
-        
+        connection = await backend.connection_for_provider(telegram_id, provider)
         if not connection:
             raise BackendError("لم يتم العثور على اتصال لهذا المزود.")
 
@@ -384,6 +413,7 @@ async def model_choose_variant(
                 model_provider=provider,
                 model_name=model,
                 model_variant=variant,
+                user_provider_id=data.get("user_provider_id"),
             )
         else:
             await backend.update_session_model(
@@ -393,6 +423,7 @@ async def model_choose_variant(
                 model_provider=provider,
                 model_name=model,
                 model_variant=variant,
+                user_provider_id=data.get("user_provider_id"),
             )
     except BackendError:
         await callback.message.answer("تعذر تحديث النموذج. حاول مرة أخرى.")

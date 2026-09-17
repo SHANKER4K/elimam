@@ -82,6 +82,10 @@ def _load_connection(
     `up.user_id = %s` is the ownership predicate and it is the only thing
     standing between one user's request and another user's funded connection:
     a foreign `user_provider_id` matches no row here instead of spending it.
+
+    `providers` is LEFT JOINed because a custom connection has
+    `provider_id IS NULL` and an inner join would make it invisible: the user
+    could add one, but no request could ever resolve it.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -90,19 +94,20 @@ def _load_connection(
                     "SELECT up.id, up.user_id, up.base_url, up.api_style, "
                     "       up.encrypted_key, pm.variants, p.requires_key "
                     "FROM user_providers up "
-                    "JOIN providers p ON p.id = up.provider_id "
+                    "LEFT JOIN providers p ON p.id = up.provider_id "
                     "LEFT JOIN provider_models pm "
                     "       ON pm.user_provider_id = up.id AND pm.model_id = %s "
                     "WHERE up.id = %s AND up.user_id = %s",
                     (model, user_provider_id, user_id),
                 )
             else:
-                # Legacy session rows predate sessions.user_provider_id.
+                # Legacy session rows predate sessions.user_provider_id. Only a
+                # catalog provider can be identified without one.
                 cur.execute(
                     "SELECT up.id, up.user_id, up.base_url, up.api_style, "
                     "       up.encrypted_key, pm.variants, p.requires_key "
                     "FROM user_providers up "
-                    "JOIN providers p ON p.id = up.provider_id "
+                    "LEFT JOIN providers p ON p.id = up.provider_id "
                     "LEFT JOIN provider_models pm "
                     "       ON pm.user_provider_id = up.id AND pm.model_id = %s "
                     "WHERE p.slug = %s AND up.user_id = %s",
@@ -120,24 +125,28 @@ def resolve_model_config(
 ) -> dict[str, Any]:
     """Resolve (connection, model, variant) -> everything `stream()` needs.
 
-    Falls back to the provider's defaults with **no key** when the user has no
-    connection for it; a keyless provider (`providers.requires_key` false) can
-    still be used that way, which is the old free-provider behaviour.
+    A connection the caller owns is the authority: its `base_url`,
+    `api_style`, key and `provider_models` rows win, and the catalog row is
+    optional. That is the only way a **custom** connection can resolve -- it
+    has no `providers` row at all.
+
+    With no connection, it falls back to the catalog's defaults with **no
+    key**; a keyless provider (`providers.requires_key` false) can still be
+    used that way, which is the old free-provider behaviour.
     """
     provider = _provider_rows().get(provider_slug)
 
-    if provider is None:
-        raise ValueError(f"Unknown model provider: {provider_slug}")
-
     row = _load_connection(user_provider_id, provider_slug, model, user_id)
+    variants: list[str] | None = None
 
     if row is None:
+        if provider is None:
+            raise ValueError(f"Unknown model provider: {provider_slug}")
         url = provider["url"]
         api_style = provider["api_style"]
         api_key = None
         requires_key = provider["requires_key"]
         resolved_user_provider_id = None
-        variants = None
     else:
         (
             resolved_user_provider_id,
@@ -152,13 +161,18 @@ def resolve_model_config(
             # Unreachable: the WHERE clause above already filters by user_id.
             raise ValueError(f"Unknown model provider: {provider_slug}")
         api_key = decrypt(encrypted_key) if encrypted_key else None
-
-    model_config = provider["models"].get(model)
-
-    if not isinstance(model_config, dict):
-        raise ValueError(f"Unknown model: {provider_slug}/{model}")
+        if requires_key is None:
+            # Custom connection: there is no catalog row to ask. A keyless
+            # custom endpoint (local Ollama and friends) is legitimate, so a
+            # connection only requires a key when one is actually stored.
+            requires_key = encrypted_key is not None
 
     if variants is None:
+        # This connection has no provider_models row for the model, or there is
+        # no connection: only a catalog provider can vouch for it.
+        model_config = (provider or {}).get("models", {}).get(model)
+        if not isinstance(model_config, dict):
+            raise ValueError(f"Unknown model: {provider_slug}/{model}")
         variants = model_config.get("variants", [])
 
     if variant not in variants:
