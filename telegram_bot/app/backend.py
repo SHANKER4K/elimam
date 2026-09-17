@@ -175,6 +175,75 @@ class BackendClient:
         )
         return bool(result and result.get("has_key"))
 
+    async def list_my_providers(self, telegram_id: str) -> dict[str, Any]:
+        return await self._request_json("GET", "/me/providers", headers=self._identity_headers(telegram_id))
+
+    async def connect_provider(
+        self,
+        telegram_id: str,
+        provider_id: int,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        json_body = {"provider_id": provider_id}
+        if api_key is not None: json_body["api_key"] = api_key
+        if base_url is not None: json_body["base_url"] = base_url
+        if extra_headers is not None: json_body["extra_headers"] = extra_headers
+        return await self._request_json(
+            "POST",
+            "/me/providers",
+            json_body=json_body,
+            headers=self._identity_headers(telegram_id),
+        )
+
+    async def add_custom_provider(
+        self,
+        telegram_id: str,
+        name: str,
+        base_url: str,
+        api_style: str,
+        api_key: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        json_body = {"name": name, "base_url": base_url, "api_style": api_style}
+        if api_key is not None: json_body["api_key"] = api_key
+        if extra_headers is not None: json_body["extra_headers"] = extra_headers
+        return await self._request_json(
+            "POST",
+            "/me/providers/custom",
+            json_body=json_body,
+            headers=self._identity_headers(telegram_id),
+        )
+
+    async def update_provider(
+        self,
+        telegram_id: str,
+        connection_id: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._request_json(
+            "PATCH",
+            f"/me/providers/{connection_id}",
+            json_body=body,
+            headers=self._identity_headers(telegram_id),
+        )
+
+    async def delete_provider(self, telegram_id: str, connection_id: str) -> dict[str, Any]:
+        return await self._request_json(
+            "DELETE",
+            f"/me/providers/{connection_id}",
+            headers=self._identity_headers(telegram_id),
+        )
+
+    async def sync_provider(self, telegram_id: str, connection_id: str) -> dict[str, Any]:
+        return await self._request_json(
+            "POST",
+            f"/me/providers/{connection_id}/sync",
+            headers=self._identity_headers(telegram_id),
+        )
+
+    # DEPRECATED: to be removed in Phase D after `store_key` callers are replaced.
     async def store_key(
         self,
         *,
@@ -187,7 +256,9 @@ class BackendClient:
         await self._request_json(
             "POST",
             path,
-            json_body={"user_id": user_id, "provider": provider, "api_key": api_key},
+            json_body={
+                "user_id": user_id, "provider": provider, "api_key": api_key
+            },
             headers=self._identity_headers(telegram_id),
         )
 
