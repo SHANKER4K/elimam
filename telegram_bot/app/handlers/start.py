@@ -17,7 +17,7 @@ def providers_keyboard(providers: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=name, callback_data=f"provider:{name}")]
         for name in providers
     ]
-    buttons.append([InlineKeyboardButton(text="➕ Add Custom", callback_data="provider:custom")])
+    buttons.append([InlineKeyboardButton(text="➕ إضافة مزود مخصص", callback_data="provider:custom")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
