@@ -359,3 +359,67 @@ async def model_choose_variant(
         f"تم تحديث النموذج.\n\nمزود الخدمة: {provider}\nالنموذج: {model}\nالإضافة: {variant}"
     )
     await callback.answer()
+
+@router.callback_query(F.data.startswith("manage_provider:"))
+async def manage_provider_menu(
+    callback: CallbackQuery, backend: BackendClient
+) -> None:
+    cid = callback.data.split(":", 1)[1]
+    
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 مزامنة النماذج", callback_data=f"manage_provider:sync:{cid}")],
+            [InlineKeyboardButton(text="🗑️ حذف الاتصال", callback_data=f"manage_provider:delete:{cid}")],
+            [InlineKeyboardButton(text="⬅️ عودة", callback_data="back_to_providers")],
+        ]
+    )
+    
+    await callback.message.edit_text(
+        "إدارة الاتصال بمزود الخدمة:\n\nاختر إجراءً:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("manage_provider:sync:"))
+async def manage_provider_sync(
+    callback: CallbackQuery, backend: BackendClient
+) -> None:
+    cid = callback.data.split(":", 2)[2]
+    try:
+        await backend.sync_provider(cid)
+        await callback.answer("تمت مزامنة النماذج بنجاح ✅", show_alert=True)
+    except BackendError as exc:
+        await callback.answer(f"فشلت المزامنة: {str(exc)}", show_alert=True)
+
+@router.callback_query(F.data.startswith("manage_provider:delete:"))
+async def manage_provider_delete(
+    callback: CallbackQuery, backend: BackendClient
+) -> None:
+    cid = callback.data.split(":", 2)[2]
+    try:
+        await backend.delete_provider(cid)
+        await callback.message.edit_text("تم حذف الاتصال بنجاح. يمكنك إضافة مزود جديد باستخدام /model.")
+        await callback.answer()
+    except BackendError as exc:
+        await callback.answer(f"فشل الحذف: {str(exc)}", show_alert=True)
+
+@router.callback_query(F.data == "back_to_providers")
+async def manage_provider_back(
+    callback: CallbackQuery, backend: BackendClient
+) -> None:
+    telegram_id = str(callback.from_user.id)
+    try:
+        result = await backend.list_my_providers(telegram_id)
+        connections = result.get("connections", [])
+    except BackendError:
+        await callback.answer("تعذر جلب القائمة.", show_alert=True)
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=c["name"], callback_data=f"manage_provider:{c['id']}")]
+            for c in connections
+        ]
+    )
+    await callback.message.edit_text("إليك قائمة بمزودي الخدمة المتصلين بحسابك:", reply_markup=keyboard)
+    await callback.answer()
