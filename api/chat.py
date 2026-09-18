@@ -123,20 +123,33 @@ def _build_agent(
         model = AnthropicModel(model_name, provider=provider)
         model_settings = {}
     elif provider_slug == "deepseek":
-        provider = DeepSeekProvider(api_key=api_key) if api_key else OpenAIProvider(base_url=provider_url, api_key=api_key)
+        provider = (
+            DeepSeekProvider(api_key=api_key)
+            if api_key
+            else OpenAIProvider(base_url=provider_url, api_key=api_key)
+        )
+        model = OpenAIChatModel(model_name, provider=provider)
+        model_settings = OpenAIChatModelSettings(temperature=0.5)
+    elif provider_slug == "free":
+        # The "free" provider is a special case: it doesn't require an API key,
+        # and the user must select a model from the available options.
+        provider = OpenAIProvider(
+            base_url=os.environ.get("FREE_PROVIDER_URL"),
+            api_key=os.environ.get("FREE_PROVIDER_API_KEY"),
+        )
         model = OpenAIChatModel(model_name, provider=provider)
         model_settings = OpenAIChatModelSettings(temperature=0.5)
     else:
         # Default to OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Mistral, etc.)
         provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
         model = OpenAIChatModel(model_name, provider=provider)
-        
+
         settings_kwargs = {"temperature": 0.5}
         if provider_slug == "openai":
             settings_kwargs["openai_service_tier"] = "flex"
             if variant:
                 settings_kwargs["openai_reasoning_effort"] = variant
-        
+
         model_settings = OpenAIChatModelSettings(**settings_kwargs)
 
     return Agent(
@@ -148,6 +161,7 @@ def _build_agent(
         toolsets=[tools],
         retries=3,
     )
+
 
 compact_tools = ClearToolResults(max_tokens=70_000)
 compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)

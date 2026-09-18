@@ -91,6 +91,15 @@ async def model_choose_provider(
         await callback.message.answer("تعذر التحقق من مفتاح API. حاول مرة أخرى.")
         await callback.answer()
         return
+    # if the provider is "free" the user should go to models to choose a model
+    if provider == "free":
+        await state.set_state(ModelChange.model)
+        await callback.message.edit_text(
+            f"مزود الخدمة: {provider}\n\nهذا المزود لا يتطلب مفتاح API. اختر نموذجًا:",
+            reply_markup=models_keyboard(providers, provider),
+        )
+        await callback.answer()
+        return
 
     if has_key:
         await state.set_state(ModelChange.model)
