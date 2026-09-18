@@ -11,3 +11,5 @@ sentence_transformers
 uvicorn
 psycopg2-binary
 PyYAML>=6.0,<7
+mcp
+
