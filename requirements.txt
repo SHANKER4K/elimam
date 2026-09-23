@@ -3,13 +3,14 @@ qdrant_client
 pydantic
 pydantic-ai
 pydantic-ai-harness
+pydantic-ai-slim[groq]
+pydantic-ai-slim[mistral]
+pydantic-ai-slim[xai]
 opik
 fastapi
 logfire[httpx]
 fastembed
-sentence_transformers
 uvicorn
 psycopg2-binary
 PyYAML>=6.0,<7
 mcp
-
