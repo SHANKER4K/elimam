@@ -11,15 +11,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    StrictFloat,
     StrictInt,
     StrictStr,
     conlist,
-    field_validator,
     model_validator,
 )
 from qdrant_client import QdrantClient, models
-from sentence_transformers import CrossEncoder, SentenceTransformer
 import httpx
 
 load_dotenv()
