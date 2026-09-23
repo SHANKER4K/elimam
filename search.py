@@ -50,6 +50,11 @@ reranker_client = httpx.AsyncClient(
     timeout=60.0,
 )
 
+# ponytail: TEI rejects requests with more texts than max_client_batch_size
+# (422 "batch size N > maximum allowed batch size"), 32 on the deployed
+# reranker. Upgrade path: read /info once at startup instead of hardcoding.
+RERANK_BATCH_SIZE = 32
+
 sparse_model = SparseTextEmbedding("Qdrant/bm25")
 
 client = QdrantClient(
@@ -310,31 +315,48 @@ async def _rerank(
     if not points:
         return points
 
-    texts = [_preprocess(point.get("payload", {}).get("text", "")) for point in points]
+    # 1. Extract texts and filter out empty or missing strings
+    # Keep track of valid indices to map scores back correctly
+    valid_points = []
+    texts = []
 
-    response = await reranker_client.post(
-        "/rerank",
-        json={
-            "query": query_text,
-            "texts": texts,
-            "raw_scores": True,
-        },
-        timeout=60.0,
-    )
+    for point in points:
+        payload_text = point.get("payload", {}).get("text")
+        if payload_text and isinstance(payload_text, str) and payload_text.strip():
+            texts.append(_preprocess(payload_text))
+            valid_points.append(point)
 
-    response.raise_for_status()
+    if not valid_points:
+        return points[:top_k]
 
-    results = response.json()
+    # 2. TEI caps a /rerank request at max_client_batch_size texts, so send
+    # rerank_pool candidates in chunks and offset indices back to `texts`.
+    for start in range(0, len(texts), RERANK_BATCH_SIZE):
+        batch = texts[start : start + RERANK_BATCH_SIZE]
 
-    for result in results:
-        points[result["index"]]["reranker_score"] = float(result["score"])
+        # Match the schema expected by the TEI /rerank endpoint:
+        # required "query" (str) + "texts" (list[str]), optional "top_n" (int).
+        response = await reranker_client.post(
+            "/rerank",
+            json={"query": query_text, "texts": batch, "top_n": len(batch)},
+            timeout=60.0,
+        )
 
-    points.sort(
-        key=lambda point: point["reranker_score"],
+        response.raise_for_status()
+
+        # TEI returns [{"index": i, "score": s}, ...] relative to this batch.
+        for result in response.json():
+            valid_points[start + result["index"]]["reranker_score"] = float(
+                result["score"]
+            )
+
+    # Sort items that received a reranker score
+    valid_points.sort(
+        key=lambda point: point.get("reranker_score", -float("inf")),
         reverse=True,
     )
 
-    return points[:top_k]
+    return valid_points[:top_k]
 
 
 def _query_points(

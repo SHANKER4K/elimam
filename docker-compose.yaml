@@ -55,19 +55,20 @@ services:
       start_period: 120s
 
   embedding:
-      image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
-      container_name: elimam_embedding
-      restart: unless-stopped
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: elimam_embedding
+    restart: unless-stopped
 
-      command:
-        - --model-id
-        - Omartificial-Intelligence-Space/GATE-AraBert-v1
+    command:
+      - --model-id
+      - Omartificial-Intelligence-Space/GATE-AraBert-v1
 
-      volumes:
-        - ./models/gate-arabert:/data
+    volumes:
+      - ./models/gate-arabert:/data
 
-      expose:
-        - "80"
+    ports:
+      - "8080:80"
+
 
   reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
@@ -81,9 +82,8 @@ services:
     volumes:
       - ./models/reranker:/data
 
-    expose:
-      - "80"
-
+    ports:
+      - "8081:80"
   telegram:
     build:
       context: ./telegram_bot/
