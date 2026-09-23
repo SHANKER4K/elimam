@@ -15,6 +15,7 @@ from pydantic_ai import (
     CallToolsNode,
     FunctionToolset,
     ModelRequestNode,
+    ModelSettings,
     ToolCallPart,
     ToolReturnPart,
     ThinkingPart,
@@ -31,11 +32,26 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
 )
 from pydantic_ai.capabilities.hooks import Hooks
+from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.deepseek import DeepSeekProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.google import GoogleProvider
+
+from pydantic_ai.models.groq import GroqModel, GroqModelSettings
+from pydantic_ai.providers.groq import GroqProvider
+
+from pydantic_ai.models.xai import XaiModel
+from pydantic_ai.providers.xai import XaiProvider
+
+from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.providers.openrouter import OpenRouterProvider
+
+from pydantic_ai.models.mistral import MistralModel
+from pydantic_ai.providers.mistral import MistralProvider
+
 from pydantic_ai_harness.compaction import (
     ClearToolResults,
     SummarizingCompaction,
@@ -51,14 +67,11 @@ from search import (
     get_hadith,
     get_tafsir,
     get_book,
-    get_books_hadith,
-    get_books_tafsir,
     get_books_books,
+    get_books_sunnah,
     get_books_categories,
     setup_indexes,
-    dense_search,
-    sparse_search,
-    hybrid_search,
+    search,
 )
 from api.users import get_or_create_user_by_telegram_id
 from identity import Unauthorized, current_user_id, resolve_identity
@@ -109,6 +122,71 @@ system_prompt = ""
 with open("./skills/turath-index-skill.md") as file:
     system_prompt = file.read()
 
+# ponytail: trigger on a fraction of the model's real context window, not an
+# absolute 70k that a 64k model never reaches. Unknown/custom models fall back to
+# 32k (compacting early costs a summary; overflowing loses the request).
+compact_tools = ClearToolResults(max_fraction=0.35, fallback_context_window=32_000)
+compact_summary = SummarizingCompaction(
+    max_fraction=0.5, keep_messages=20, fallback_context_window=32_000
+)
+context_report = ReportContextUsage(
+    on_usage=lambda usage: logger.info(
+        "context_usage", extra={"fraction": round(usage.fraction * 100)}
+    )
+)
+
+hooks = Hooks()
+capabilities = [hooks, compact_tools, compact_summary, context_report]
+
+
+tools = FunctionToolset(
+    tools=[
+        get_quran,
+        get_hadith,
+        get_tafsir,
+        get_book,
+        get_books_books,
+        get_books_sunnah,
+        get_books_categories,
+        search,
+    ],
+    # defer_loading=True,
+)
+
+
+def _build_settings(
+    provider_key: str, variant: str | None, flex: bool
+) -> ModelSettings | None:
+    """Map a generic 'variant' (reasoning effort) + 'flex' (cheap/slow tier)
+    onto each provider's own settings dialect."""
+    kwargs: dict[str, Any] = {}
+
+    if provider_key in ("openai", "deepseek"):  # OpenAI-compatible chat API
+        if flex:
+            kwargs["openai_service_tier"] = "flex"
+        if variant:
+            kwargs["openai_reasoning_effort"] = variant
+        return OpenAIChatModelSettings(**kwargs) if kwargs else None
+
+    if provider_key == "anthropic":
+        if variant:
+            # Anthropic uses extended thinking instead of a simple effort enum
+            kwargs["anthropic_thinking"] = {"type": "enabled", "budget_tokens": 4096}
+        return AnthropicModelSettings(**kwargs) if kwargs else None
+
+    if provider_key == "groq":
+        if variant:
+            kwargs["groq_reasoning_format"] = "parsed"
+        return GroqModelSettings(**kwargs) if kwargs else None
+
+    if provider_key == "google":
+        if variant:
+            kwargs["google_thinking_config"] = {"include_thoughts": True}
+        return GoogleModelSettings(**kwargs) if kwargs else None
+
+    # openrouter / mistral: fall back to generic ModelSettings only
+    return None
+
 
 def _build_agent(
     provider_slug: str,
@@ -118,18 +196,32 @@ def _build_agent(
     variant: str,
 ) -> Agent:
     """Build a PydanticAI Agent for OpenAI, Anthropic, OpenRouter, DeepSeek, or other compatible providers."""
-    if provider_slug in ("anthropic",) or provider_slug.startswith("anthropic"):
-        provider = AnthropicProvider(base_url=provider_url, api_key=api_key)
-        model = AnthropicModel(model_name, provider=provider)
-        model_settings = {}
-    elif provider_slug == "deepseek":
-        provider = (
-            DeepSeekProvider(api_key=api_key)
-            if api_key
-            else OpenAIProvider(base_url=provider_url, api_key=api_key)
-        )
-        model = OpenAIChatModel(model_name, provider=provider)
-        model_settings = OpenAIChatModelSettings(temperature=0.5)
+
+    builders = {
+        "openai": lambda: OpenAIChatModel(
+            model_name, provider=OpenAIProvider(api_key=api_key)
+        ),
+        "anthropic": lambda: AnthropicModel(
+            model_name, provider=AnthropicProvider(api_key=api_key)
+        ),
+        "groq": lambda: GroqModel(model_name, provider=GroqProvider(api_key=api_key)),
+        "mistral": lambda: MistralModel(
+            model_name, provider=MistralProvider(api_key=api_key)
+        ),
+        "deepseek": lambda: OpenAIChatModel(
+            model_name, provider=DeepSeekProvider(api_key=api_key)
+        ),
+        "openrouter": lambda: OpenRouterModel(
+            model_name, provider=OpenRouterProvider(api_key=api_key)
+        ),
+        "google": lambda: GoogleModel(
+            model_name, provider=GoogleProvider(api_key=api_key)
+        ),
+        "xai": lambda: XaiModel(model_name, provider=XaiProvider(api_key=api_key)),
+    }
+    if provider_slug in builders:
+        model = builders[provider_slug]()
+        model_settings = _build_settings(provider_slug, variant, True)
     elif provider_slug == "free":
         # The "free" provider is a special case: it doesn't require an API key,
         # and the user must select a model from the available options.
@@ -161,34 +253,6 @@ def _build_agent(
         toolsets=[tools],
         retries=3,
     )
-
-
-compact_tools = ClearToolResults(max_tokens=70_000)
-compact_summary = SummarizingCompaction(max_fraction=0.5, keep_messages=30)
-context_report = ReportContextUsage(
-    on_usage=lambda usage: logger.info(
-        "context_usage", extra={"fraction": round(usage.fraction * 100)}
-    )
-)
-
-hooks = Hooks()
-capabilities = [hooks, compact_tools, compact_summary, context_report]
-
-tools = FunctionToolset(
-    tools=[
-        get_quran,
-        get_hadith,
-        get_tafsir,
-        get_book,
-        get_books_hadith,
-        get_books_tafsir,
-        get_books_books,
-        get_books_categories,
-        dense_search,
-        sparse_search,
-        hybrid_search,
-    ]
-)
 
 
 def load_session(session_id: str) -> list:

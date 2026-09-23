@@ -5,13 +5,19 @@
       "source": "pydantic/skills",
       "sourceType": "github",
       "skillPath": "skills/building-pydantic-ai-agents/SKILL.md",
-      "computedHash": "5721f34beafb1f1a8ad5c82ad643addded408baa5c91d6b9d2e0bcc55dc5b46b"
+      "computedHash": "5a588f2859c4998c3299cb7768ffc4207d1c9d762ebc608bc56d1bba47cce3aa"
     },
     "code-review-skill": {
       "source": "awesome-skills/code-review-skill",
       "sourceType": "github",
       "skillPath": "SKILL.md",
       "computedHash": "f3d9764f15d318ee5fdb465015bd77f1efbf7c8e48c68a1620a5710c5dd6a262"
+    },
+    "excalidraw-diagram": {
+      "source": "coleam00/excalidraw-diagram-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "fc91249969c7c1adc1f810ddfe10f18e206b78609467bb4955248e9138932e8a"
     },
     "logging-best-practices": {
       "source": "boristane/agent-skills",
@@ -35,7 +41,7 @@
       "source": "pydantic/skills",
       "sourceType": "github",
       "skillPath": "skills/pydantic-ai-harness/SKILL.md",
-      "computedHash": "a40593e8a2232dd733419385d336df04aba4029f9244e077f0258a8d47093cb3"
+      "computedHash": "24ebd64439b138bb1f7c0fa466d0a64a9d99d36108a670673c9c75c455f9ce8d"
     },
     "qdrant-advisor": {
       "source": "qdrant/skills",

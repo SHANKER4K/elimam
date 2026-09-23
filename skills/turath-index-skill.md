@@ -264,3 +264,17 @@
 لا تستمر في البحث بحثًا عن إجابة "أفضل" إذا كانت الإجابة الحالية مدعومة وكافية.
 
 **الدقة والكفاية أهم من كثرة النتائج.**
+
+---
+
+The functions you have is:
+get_quran,
+get_hadith,
+get_tafsir,
+get_book,
+get_books_books,
+get_books_sunnah,
+get_books_categories,
+dense_search,
+sparse_search,
+hybrid_search,

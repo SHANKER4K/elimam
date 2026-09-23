@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 from camel_tools.utils.dediac import dediac_ar
 from camel_tools.utils.normalize import normalize_alef_ar
@@ -21,6 +20,7 @@ from pydantic import (
 )
 from qdrant_client import QdrantClient, models
 from sentence_transformers import CrossEncoder, SentenceTransformer
+import httpx
 
 load_dotenv()
 
@@ -33,31 +33,26 @@ CollectionName = Literal["quran", "hadith", "tafsir", "books", "sunnah"]
 # -----------------------------
 # Models
 # -----------------------------
+EMBEDDING_URL = os.getenv(
+    "EMBEDDING_URL",
+    "http://embedding:80",
+)
 
+RERANKER_URL = os.getenv(
+    "RERANKER_URL",
+    "http://reranker:80",
+)
 
-@lru_cache(maxsize=1)
-def load_model(model_name: str):
-    print("Loading Model")
-    value = SentenceTransformer(
-        model_name,
-        model_kwargs={"dtype": "float16"},
-        # backend="onnx",
-    )
-    print("Done")
-    return value
+embedding_client = httpx.AsyncClient(
+    base_url=EMBEDDING_URL,
+    timeout=30.0,
+)
 
+reranker_client = httpx.AsyncClient(
+    base_url=RERANKER_URL,
+    timeout=60.0,
+)
 
-@lru_cache(maxsize=1)
-def ranker_loader(model_name: str):
-    return CrossEncoder(
-        model_name,
-        # backend="onnx",
-        trust_remote_code=True,
-    )
-
-
-model = load_model("Omartificial-Intelligence-Space/GATE-AraBert-v1")
-reranker = ranker_loader("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 sparse_model = SparseTextEmbedding("Qdrant/bm25")
 
 client = QdrantClient(
@@ -65,6 +60,42 @@ client = QdrantClient(
     api_key=QDRANT_API_KEY,
     cloud_inference=True,
 )
+
+HADITH_BOOKS = [
+    "abudawud",
+    "bukhari",
+    "dehlawi",
+    "ibnmajah",
+    "malik",
+    "nasai",
+    "nawawi",
+    "qudsi",
+    "tirmidhi",
+]
+
+
+class QuranId(BaseModel):
+    ids: str = Field(description="In that format 1:1")
+
+
+class TafsirId(BaseModel):
+    book: Literal["saadi", "katheer", "moyassar", "tabary", "baghawy"]
+    ids: str = Field(description="In that format 1:1")
+
+
+class HadithId(BaseModel):
+    book: Literal[
+        "abudawud",
+        "bukhari",
+        "dehlawi",
+        "ibnmajah",
+        "malik",
+        "nasai",
+        "nawawi",
+        "qudsi",
+        "tirmidhi",
+    ]
+    hadith_number: float
 
 
 class IntRangeFilter(BaseModel):
@@ -187,6 +218,17 @@ SearchRequest: TypeAlias = Annotated[
 # -----------------------------
 
 
+async def _encode(texts: list[str]) -> list[list[float]]:
+    response = await embedding_client.post(
+        "/embed",
+        json={"inputs": texts},
+    )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
 def _preprocess(text: str) -> str:
     text = dediac_ar(text)
     text = normalize_alef_ar(text)
@@ -194,8 +236,9 @@ def _preprocess(text: str) -> str:
     return " ".join(text.split())
 
 
-def _dense_query(text: str) -> list[float]:
-    return model.encode([_preprocess(text)])[0].tolist()
+async def _dense_query(text: str) -> list[float]:
+    embeddings = await _encode([_preprocess(text)])
+    return embeddings[0]
 
 
 def _sparse_query(text: str) -> models.SparseVector:
@@ -262,20 +305,38 @@ def _build_filter(filters: BaseModel | None) -> models.Filter | None:
 # -----------------------------
 
 
-def _rerank(query_text: str, points: list[dict], top_k: int) -> list[dict]:
+async def _rerank(
+    query_text: str,
+    points: list[dict],
+    top_k: int,
+) -> list[dict]:
     if not points:
         return points
 
-    pairs = [
-        (query_text, _preprocess(point.get("payload", {}).get("text", "")))
-        for point in points
-    ]
-    scores = reranker.predict(pairs, batch_size=32)
+    texts = [_preprocess(point.get("payload", {}).get("text", "")) for point in points]
 
-    for point, score in zip(points, scores):
-        point["reranker_score"] = float(score)
+    response = await reranker_client.post(
+        "/rerank",
+        json={
+            "query": query_text,
+            "texts": texts,
+            "raw_scores": True,
+        },
+        timeout=60.0,
+    )
 
-    points.sort(key=lambda point: point["reranker_score"], reverse=True)
+    response.raise_for_status()
+
+    results = response.json()
+
+    for result in results:
+        points[result["index"]]["reranker_score"] = float(result["score"])
+
+    points.sort(
+        key=lambda point: point["reranker_score"],
+        reverse=True,
+    )
+
     return points[:top_k]
 
 
@@ -301,7 +362,7 @@ def _query_points(
     ]
 
 
-def dense_search(
+async def dense_search(
     request: QuranSearchRequest
     | HadithSearchRequest
     | TafsirSearchRequest
@@ -311,21 +372,28 @@ def dense_search(
     """Dense vector search followed by cross-encoder reranking."""
     try:
         query_text = _preprocess(request.query_text)
+
         points = _query_points(
             collection=request.collection,
-            query=_dense_query(query_text),
+            query=await _dense_query(query_text),
             using="dense",
             limit=request.rerank_pool,
             query_filter=_build_filter(request.filters),
         )
-        return _rerank(query_text, points, request.top_k)
+
+        return await _rerank(
+            query_text,
+            points,
+            request.top_k,
+        )
+
     except ValueError:
         raise
     except Exception as exc:
         return [{"error": f"{type(exc).__name__}: {exc}"}]
 
 
-def sparse_search(
+async def sparse_search(
     request: QuranSearchRequest
     | HadithSearchRequest
     | TafsirSearchRequest
@@ -343,14 +411,14 @@ def sparse_search(
             limit=request.rerank_pool,
             query_filter=_build_filter(request.filters),
         )
-        return _rerank(query_text, points, request.top_k)
+        return await _rerank(query_text, points, request.top_k)
     except ValueError:
         raise
     except Exception as exc:
         return [{"error": f"{type(exc).__name__}: {exc}"}]
 
 
-def hybrid_search(
+async def hybrid_search(
     request: QuranSearchRequest
     | HadithSearchRequest
     | TafsirSearchRequest
@@ -366,7 +434,7 @@ def hybrid_search(
                 collection_name=request.collection,
                 prefetch=[
                     models.Prefetch(
-                        query=_dense_query(query_text),
+                        query=await _dense_query(query_text),
                         using="dense",
                         limit=request.rerank_pool,
                     ),
@@ -383,11 +451,52 @@ def hybrid_search(
                 query_filter=_build_filter(request.filters),
             ).points
         ]
-        return _rerank(query_text, points, request.top_k)
+        return await _rerank(query_text, points, request.top_k)
     except ValueError:
         raise
     except Exception as exc:
         return [{"error": f"{type(exc).__name__}: {exc}"}]
+
+
+# -----------------------------
+# Agent-facing search tool
+# -----------------------------
+
+_COLLECTION_REQUEST = {
+    "quran": QuranSearchRequest,
+    "hadith": HadithSearchRequest,
+    "tafsir": TafsirSearchRequest,
+    "books": BooksSearchRequest,
+    "sunnah": SunnahSearchRequest,
+}
+
+
+async def search(
+    collection: Literal["quran", "hadith", "tafsir", "books", "sunnah"],
+    query_text: str,
+    top_k: int = 10,
+    filters: dict[str, Any] | None = None,
+) -> list[dict]:
+    """Search one collection (hybrid dense+BM25 RRF, cross-encoder reranked).
+
+    `query_text` must be Arabic; search only the collection relevant to the
+    question. `filters` keys by collection — quran: surah_number, surah;
+    hadith: book, grade; tafsir: surah_number, surah, ayah_number; books:
+    book_id, book_name, category_name, all_authors, author_death, book_date;
+    sunnah: books' keys plus athar_number. Text fields take a str or list[str];
+    numeric fields take an int, list[int], or a range {eq,lt,gt,lte,gte}.
+    """
+    # ponytail: one flat tool replaces dense/sparse/hybrid (2.3k token schema
+    # each — the model never chose among them). The generic `filters` dict is
+    # coerced by the collection's typed request model, so validation still holds.
+    return await hybrid_search(
+        _COLLECTION_REQUEST[collection](
+            collection=collection,
+            query_text=query_text,
+            top_k=top_k,
+            filters=filters,
+        )
+    )
 
 
 # -----------------------------
@@ -474,39 +583,30 @@ def _get_by_id(collection: str, value: str):
     return points[0].payload if points else []
 
 
-def get_quran(id: str):
-    return _get_by_id("quran", id)
+def get_quran(req: QuranId):
+    "get a specific ayah ex(1:1)"
+    return _get_by_id("quran", req.ids)
 
 
-def get_hadith(book: str, hadith_number: float):
-    return _get_by_id("hadith", f"{book}:{hadith_number}")
+def get_hadith(req: HadithId):
+    "Get a specific hadith"
+    return _get_by_id("hadith", f"{req.book}:{req.hadith_number}")
 
 
-def get_tafsir(book: str, id: str):
-    return _get_by_id("tafsir", f"{book}:{id}")
+def get_tafsir(req: TafsirId):
+    "Get a specific tafsir"
+    return _get_by_id("tafsir", f"{req.book}:{req.ids}")
 
 
 def get_book(category: int, book_id: int, chunk_index: int):
+    "Get a specific chunk"
     return _get_by_id("books", f"{category}:{book_id}:{chunk_index}")
 
 
 def get_sunnah(category: int, book_id: int, chunk_index: int):
+    "Get a specific athar"
     return _get_by_id("sunnah", f"{category}:{book_id}:{chunk_index}")
 
-
-HADITH_BOOKS = [
-    "abudawud",
-    "bukhari",
-    "dehlawi",
-    "ibnmajah",
-    "malik",
-    "nasai",
-    "nawawi",
-    "qudsi",
-    "tirmidhi",
-]
-
-TAFSIR_BOOKS = ["saadi", "katheer", "moyassar", "tabary", "baghawy"]
 
 BOOKS_LIST = [
     "إجماع السلف في الاعتقاد كما حكاه حرب الكرماني",
@@ -894,32 +994,6 @@ CATEGORIES_NAMES = [
     "علوم الحديث",
     "شروح الحديث",
 ]
-
-
-def get_books_hadith() -> list:
-    """List all hadith books (static).
-
-    Hardcoded slugs — no database I/O, instant.
-
-    Use when you need to filter data by hadith book.
-    Returns:
-        ['abudawud', 'bukhari', 'dehlawi', 'ibnmajah', 'malik',
-         'nasai', 'nawawi', 'qudsi', 'tirmidhi'] (a fresh copy).
-    """
-    return list(HADITH_BOOKS)
-
-
-def get_books_tafsir() -> list:
-    """List all tafsir books (static).
-
-    Hardcoded slugs — no database I/O, instant.
-
-    Use when you need to filter data by tafsir book.
-
-    Returns:
-        ['saadi', 'katheer', 'moyassar', 'tabary', 'baghawy'] (a fresh copy).
-    """
-    return list(TAFSIR_BOOKS)
 
 
 def get_books_books() -> list:

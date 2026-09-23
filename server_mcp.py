@@ -1,3 +1,18 @@
+import os
+import sys as _sys
+
+# Pre-load the venv's mcp.server.lowlevel.server so it registers on sys.modules.
+# This resolves `from mcp.server import FastMCP` when running
+# `python server_mcp.py` outside the venv.
+_venv_site = "/home/ismail/Documents/projects/python/ML/Summer/projects/islam/.venv/lib/python3.13/site-packages"
+if _venv_site not in _sys.path:
+    _sys.path.insert(0, _venv_site)
+
+try:
+    import mcp.server.lowlevel.server  # noqa: F401
+except ImportError:
+    pass
+
 from mcp.server import FastMCP
 
 from search import (

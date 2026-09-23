@@ -24,18 +24,18 @@ def _enforce_caps(request: SearchRequest) -> None:
 
 
 @router.post("/dense_search")
-def dense_search_endpoint(request: SearchRequest) -> list:
+async def dense_search_endpoint(request: SearchRequest) -> list:
     _enforce_caps(request)
-    return dense_search(request)
+    return await dense_search(request)
 
 
 @router.post("/sparse_search")
-def sparse_search_endpoint(request: SearchRequest) -> list:
+async def sparse_search_endpoint(request: SearchRequest) -> list:
     _enforce_caps(request)
-    return sparse_search(request)
+    return await sparse_search(request)
 
 
 @router.post("/hybrid_search")
-def hybrid_search_endpoint(request: SearchRequest) -> list:
+async def hybrid_search_endpoint(request: SearchRequest) -> list:
     _enforce_caps(request)
-    return hybrid_search(request)
+    return await hybrid_search(request)

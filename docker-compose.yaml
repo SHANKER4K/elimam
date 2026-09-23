@@ -9,6 +9,10 @@ services:
     image: elimam:latest
     container_name: backend
     restart: unless-stopped
+    depends_on:
+      - qdrant
+      - embedding
+      - reranker
     # ponytail: no published port - the Next.js proxy is the only entry point.
     # Reachable on the compose network as http://backend:8000 (nginx/bot).
 
@@ -49,6 +53,36 @@ services:
       timeout: 5s
       retries: 5
       start_period: 120s
+
+  embedding:
+      image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+      container_name: elimam_embedding
+      restart: unless-stopped
+
+      command:
+        - --model-id
+        - Omartificial-Intelligence-Space/GATE-AraBert-v1
+
+      volumes:
+        - ./models/gate-arabert:/data
+
+      expose:
+        - "80"
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: elimam_reranker
+    restart: unless-stopped
+
+    command:
+      - --model-id
+      - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+
+    volumes:
+      - ./models/reranker:/data
+
+    expose:
+      - "80"
 
   telegram:
     build:
