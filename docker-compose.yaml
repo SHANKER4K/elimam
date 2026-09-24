@@ -76,7 +76,7 @@ services:
 
     command:
       - --model-id
-      - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+      - ALJIACHI/Mizan-Rerank-v1
 
     volumes:
       - ./models/reranker:/data
