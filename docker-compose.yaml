@@ -68,7 +68,6 @@ services:
     ports:
       - "8080:80"
 
-
   reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
     container_name: elimam_reranker
@@ -76,7 +75,13 @@ services:
 
     command:
       - --model-id
-      - BAAI/bge-reranker-v2-m3
+      - /data/onnx-mizan
+      - --max-batch-tokens
+      - "2048"
+      - --max-client-batch-size
+      - "8"
+      - --max-concurrent-requests
+      - "32"
 
     volumes:
       - ./models/reranker:/data
