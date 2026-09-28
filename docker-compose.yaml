@@ -75,19 +75,14 @@ services:
 
     command:
       - --model-id
-      - /data/onnx-mizan
-      - --max-batch-tokens
-      - "2048"
-      - --max-client-batch-size
-      - "8"
-      - --max-concurrent-requests
-      - "32"
+      - cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
 
     volumes:
       - ./models/reranker:/data
 
     ports:
       - "8081:80"
+
 
   telegram:
     build:
