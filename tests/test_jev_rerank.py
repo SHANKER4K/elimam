@@ -70,6 +70,8 @@ def test_jev_client_authenticates_and_names_itself():
     assert r.jev_client.headers["authorization"] == "Bearer test-key"
     # Cloudflare answers a generic SDK user agent with 403/1010.
     assert r.jev_client.headers["user-agent"] == "elimam-backend/0.1"
+    # OpenCode Go routes per conversation; a missing id is an unroutable request.
+    assert r.jev_client.headers["x-opencode-session"].startswith("elimam-")
 
 
 def _points(n: int) -> list[dict]:

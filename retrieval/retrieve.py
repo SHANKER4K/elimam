@@ -136,6 +136,10 @@ class Retrieval:
                 # Cloudflare in front of the endpoint answers a generic SDK or
                 # library user agent with 403 "error code: 1010".
                 "User-Agent": "elimam-backend/0.1",
+                # OpenCode Go asks every client to send a stable session id per
+                # conversation; without it the request "cannot be routed
+                # efficiently". One id per process = one long conversation.
+                "x-opencode-session": f"elimam-{os.urandom(8).hex()}",
             },
         )
 
