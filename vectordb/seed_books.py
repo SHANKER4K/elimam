@@ -16,8 +16,7 @@ from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, VectorParams, SparseVectorParams, PointStruct, Modifier
 from sentence_transformers import SentenceTransformer
 from fastembed import SparseTextEmbedding
-from camel_tools.utils.dediac import dediac_ar
-from camel_tools.utils.normalize import normalize_alef_ar
+from pyarabic.araby import normalize_alef, strip_diacritics
 
 # =========================
 # Configuration
@@ -41,8 +40,8 @@ UPSERT_BATCH_SIZE = 256     # Qdrant upsert batch
 # =========================
 
 def clean_text(text: str) -> str:
-    text = dediac_ar(text)
-    text = normalize_alef_ar(text)
+    text = strip_diacritics(text)
+    text = normalize_alef(text)
     text = text.replace("\u200f", "")  # Remove RTL mark
     text = text.replace("  ", " ")     # Collapse double spaces
     return text.strip()

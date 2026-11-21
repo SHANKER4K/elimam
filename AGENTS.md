@@ -5,16 +5,16 @@ FastAPI backend + Qdrant vector search + Postgres + aiogram Telegram bot. The Ne
 ## Stack layout
 
 - FastAPI app is `server.py` at the **repo root** (not `backend/server`); routers in `api/` (chat, users, sessions, keys, messages, providers). Run: `uvicorn server:app --reload`.
-- Qdrant on `:6333`; `search.py` is the only search layer (dense GATE-AraBert-v1 + BM25 sparse + RRF hybrid). The 5 collections (`quran`, `hadith`, `tafsir`, `books`, `sunnah`) live in gitignored `qdrant_storage/`, populated via `notebooks/update_db.ipynb`.
+- Qdrant on `:6333`; the `retrieval/` package is the only search layer (dense GATE-AraBert-v1 + BM25 sparse + RRF hybrid + cross-encoder rerank). `retrieval/retrieve.py` is the `Retrieval` class (the mechanism), `retrieval/tools.py` the agent-facing tools (`search`, `get_*`), `retrieval/schemas.py` the pydantic filters/requests, `retrieval/books.py` the static title lists. The 5 collections (`quran`, `hadith`, `tafsir`, `books`, `sunnah`) live in gitignored `qdrant_storage/`, populated via `notebooks/update_db.ipynb`.
 - Postgres on `:5432`; backend uses raw psycopg2 SQL in `api/*.py`. Schema source of truth is **`../frontend/src/db/schema.ts`** (Drizzle) with migrations in `../frontend/drizzle/`. This service has no schema of its own and no migration step: `api/*.py` uses raw psycopg2 SQL against the same database, and any schema change must be mirrored here **by hand** in the same change.
 - Telegram bot in `telegram_bot/` (own venv/pyproject). It only talks to the backend over HTTP, never the DB.
 
 ## The big gotcha: import-time side effects
 
-Importing `server`, `api.chat`, or `search` requires the whole stack and the models:
+Importing `server`, `api.chat`, or `db.connection` requires the whole stack and the models:
 
-- `search.py` loads SentenceTransformer + fastembed models and connects to Qdrant at import.
-- `api/chat.py` calls `setup_indexes()` and reads `./skills/turath-index-skill.md` (relative path — run from repo root).
+- `retrieval/retrieve.py` creates its Qdrant client, embedding/reranker clients, and the fastembed BM25 model lazily on first call (`cached_property`), so `import retrieval` is free — but calling `retrieval.retrieve(...)` needs Qdrant and the TEI services.
+- `api/chat.py` calls `retrieval.setup_indexes()` and reads `./skills/turath-index-skill.md` (relative path — run from repo root).
 - `api/providers.py` loads the provider catalog from the `providers` table (the `models` jsonb column) on first use and caches it in-process; importing it needs Postgres, not a config file.
 - `db/connection.py` builds a psycopg2 pool from `DATABASE_*` env at import; needs `.env` + running Postgres.
 

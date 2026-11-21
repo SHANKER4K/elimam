@@ -140,8 +140,9 @@ SSE framing: `event: <type>\ndata: <json>\n\n` (`api/chat.py::sse`).
 
 ## Search
 
-`search.py` is the only search layer. All query text is Arabic-normalized
-(`camel-tools` dediac + alef normalize).
+`retrieval/` is the only search layer (`retrieve.py` holds the `Retrieval` class,
+`tools.py` the agent-facing tools). All query text is Arabic-normalized
+(`pyarabic` strip_diacritics + alef normalize).
 
 - **Dense:** TEI `GATE-AraBert-v1` via `EMBEDDING_URL`, Qdrant vector search
 - **Sparse:** fastembed `Qdrant/bm25`, Qdrant sparse index

@@ -11,7 +11,7 @@ flowchart TD
   V -->|ok| CAP["api/search.py route only:<br/>top_k <= 100, rerank_pool <= 500"]
 
   CAP --> PRE
-  V --> PRE["_preprocess(text)<br/>camel_tools dediac_ar + normalize_alef_ar + strip U+200F + collapse whitespace"]
+  V --> PRE["preprocess(text)<br/>pyarabic strip_diacritics + normalize_alef + strip U+200F + collapse whitespace"]
 
   PRE --> F["_build_filter(filters)<br/>list -> MatchAny, IntRangeFilter -> MatchValue + Range,<br/>scalar -> MatchValue, all joined with must"]
   F --> FY{"filters empty?"}

@@ -62,15 +62,15 @@ from pydantic_graph import End
 from api.sessions import SessionCreate, create_web_session, get_session
 from db.connection import get_conn
 
-from search import (
-    get_quran,
-    get_hadith,
-    get_tafsir,
+from retrieval import (
     get_book,
     get_books_books,
-    get_books_sunnah,
     get_books_categories,
-    setup_indexes,
+    get_books_sunnah,
+    get_hadith,
+    get_quran,
+    get_tafsir,
+    retrieval,
     search,
 )
 from api.users import get_or_create_user_by_telegram_id
@@ -91,7 +91,7 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # ---------------------------------------------------------------------------
 BOT_SHARED_SECRET = os.environ.get("BOT_SHARED_SECRET", "")
 
-setup_indexes()
+retrieval.setup_indexes()
 
 
 class WebChatRequest(BaseModel):
