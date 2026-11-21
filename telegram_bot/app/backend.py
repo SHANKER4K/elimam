@@ -343,8 +343,12 @@ class BackendClient:
                         continue
 
                     if event in {"tool"}:
-                        text = f"🔎  **{payload.get('text')}**: **{payload.get('args', {}).get('id', '')}**".strip()
-                        mdv2 = markdownify(text)
+                        title = payload.get("title") or payload.get("text") or ""
+                        subtitle = payload.get("subtitle") or ""
+                        text = f"🔎  **{title}**"
+                        if subtitle:
+                            text = f"{text}: **{subtitle}**"
+                        mdv2 = markdownify(text.strip())
 
                         await sender.answer(
                             mdv2,
