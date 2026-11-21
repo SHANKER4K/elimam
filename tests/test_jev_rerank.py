@@ -9,7 +9,7 @@ import json
 
 import httpx
 
-from retrieval.retrieve import JEV_PASSAGE_CHARS, Retrieval
+from retrieval.retrieve import JEV_CONCURRENCY, JEV_PASSAGE_CHARS, Retrieval
 
 
 def _jev(score_fn, seen: list[dict], status: int = 200):
@@ -160,3 +160,100 @@ def test_rerank_uses_tei_when_jev_is_disabled(monkeypatch):
     monkeypatch.delenv("JEV_RERANK")
 
     assert Retrieval(url="http://127.0.0.1:1", jev_api_key="").jev_enabled is False
+
+
+def test_jev_score_truncates_what_it_sends_but_the_point_keeps_its_text():
+    seen = []
+    long_text = "الصبر " * 500  # 3000 characters
+    r = Retrieval(url="http://127.0.0.1:1", jev_api_key="k", jev_pool=1)
+    r.__dict__["jev_client"] = _jev(lambda passage: 0.9, seen)
+    points = [{"id": 0, "payload": {"text": long_text}}]
+
+    asyncio.run(r.rerank("الصبر", points, top_k=1))
+
+    assert len(seen[0]["body"]["state"]["passage"]) == JEV_PASSAGE_CHARS
+    assert points[0]["payload"]["text"] == long_text  # never mutated
+    assert points[0]["reranker_score"] == 0.9
+
+
+def test_rerank_skips_blank_and_non_string_text_like_the_tei_path():
+    seen = []
+    r = Retrieval(url="http://127.0.0.1:1", jev_api_key="k", jev_pool=4)
+    r.__dict__["jev_client"] = _jev(_index, seen)
+    points = [
+        {"id": 0, "payload": {"text": "   "}},
+        {"id": 1, "payload": {"text": None}},
+        {"id": 2, "payload": {"text": 5}},
+        {"id": 3, "payload": {"text": "مقطع رقم 3 عن الصبر"}},
+    ]
+
+    top = asyncio.run(r.rerank("الصبر", points, top_k=2))
+
+    assert len(seen) == 1  # only the one point that has text
+    assert top[0]["id"] == 3
+    assert top[0]["reranker_score"] == 3.0
+
+
+def test_rerank_with_nothing_scoreable_in_the_head_uses_tei():
+    r = Retrieval(url="http://127.0.0.1:1", jev_api_key="k", jev_pool=2)
+
+    async def tei(query_text, points, top_k):
+        return [{"id": p["id"]} for p in points[:top_k]]
+
+    r._rerank_tei = tei
+    points = [{"id": i, "payload": {"text": "  "}} for i in range(4)]
+
+    top = asyncio.run(r.rerank("الصبر", points, top_k=2))
+
+    assert [p["id"] for p in top] == [0, 1]  # the head, not an empty list
+
+
+def test_rerank_never_exceeds_the_concurrency_limit():
+    in_flight = {"now": 0, "max": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        in_flight["now"] += 1
+        in_flight["max"] = max(in_flight["max"], in_flight["now"])
+        await asyncio.sleep(0)  # yield so siblings can overlap
+        in_flight["now"] -= 1
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "answers_question": {
+                        "type": "noul",
+                        "noul": _index(body["state"]["passage"]),
+                    }
+                }
+            },
+        )
+
+    r = Retrieval(url="http://127.0.0.1:1", jev_api_key="k", jev_pool=24)
+    r.__dict__["jev_client"] = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    )
+
+    asyncio.run(r.rerank("الصبر", _points(24), top_k=24))
+
+    assert in_flight["max"] <= JEV_CONCURRENCY
+
+
+def test_rerank_fallback_returns_full_results_from_the_real_tei_path():
+    r = Retrieval(url="http://127.0.0.1:1", jev_api_key="k")
+    r.__dict__["jev_client"] = _jev(_index, [], status=401)  # expired key
+
+    async def tei_batch(query_text, batch):
+        return [{"index": i, "score": float(10 - i)} for i, _ in enumerate(batch)]
+
+    r._rerank_batch = tei_batch
+
+    top = asyncio.run(r.rerank("الصبر", _points(5), top_k=3))
+
+    assert [p["id"] for p in top] == [0, 1, 2]
+    assert [p["reranker_score"] for p in top] == [10.0, 9.0, 8.0]
+
+
+def test_jev_pool_is_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("JEV_POOL", "7")
+    assert Retrieval(url="http://127.0.0.1:1").jev_pool == 7

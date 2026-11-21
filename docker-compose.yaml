@@ -24,6 +24,7 @@ services:
       - JEV_API_URL=${JEV_API_URL:-https://opencode.ai/inference/systemone/v1/systemone}
       - JEV_API_KEY=${JEV_API_KEY:-}
       - JEV_MODEL=${JEV_MODEL:-jev-1.13-free}
+      - JEV_POOL=${JEV_POOL:-24}
       - JEV_RERANK=${JEV_RERANK:-on}
       - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
 

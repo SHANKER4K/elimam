@@ -10,6 +10,7 @@ importing this module needs no Qdrant, no model download, and no network.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from functools import cached_property
 from typing import Literal
@@ -34,6 +35,9 @@ RetrievalMode = Literal["hybrid", "dense", "sparse"]
 JEV_URL = "https://opencode.ai/inference/systemone/v1/systemone"
 JEV_MODEL = "jev-1.13-free"
 JEV_CONCURRENCY = 8
+# One deadline for the whole stage, not per request: at 8 in flight a 24-pair
+# search is 3 waves, and 3 x the per-request timeout is not a search timeout.
+JEV_STAGE_TIMEOUT = 15.0
 # ponytail: one pair per request, no batching (state is shared by every question in
 # a request), so a chunk longer than this is judged on its head. Upgrade path: raise
 # it and pay the tokens, or split the chunk and take the max noul.
@@ -46,6 +50,8 @@ JEV_QUESTION = {
         "false": "The passage shares the topic but does not answer the question.",
     },
 }
+
+logger = logging.getLogger(__name__)
 
 
 class Retrieval:
@@ -65,7 +71,7 @@ class Retrieval:
         jev_url: str | None = None,
         jev_api_key: str | None = None,
         jev_model: str | None = None,
-        jev_pool: int = 24,
+        jev_pool: int | None = None,
     ) -> None:
         self.url = url or os.environ.get("QDRANT_URL", "http://localhost:6333")
         self.api_key = api_key or os.environ.get("QDRANT_API_KEY")
@@ -87,7 +93,9 @@ class Retrieval:
             if jev_model is not None
             else os.environ.get("JEV_MODEL", JEV_MODEL)
         )
-        self.jev_pool = jev_pool
+        self.jev_pool = (
+            jev_pool if jev_pool is not None else int(os.environ.get("JEV_POOL", 24))
+        )
 
     # -----------------------------
     # Lazily created dependencies
@@ -254,31 +262,45 @@ class Retrieval:
         # Jev is one HTTP round trip per pair, so it only ever sees the head of the
         # pool — but never fewer candidates than the caller asked to be returned.
         head = points[: min(len(points), max(top_k, self.jev_pool))]
-        valid = [
-            point
-            for point in head
-            if (point.get("payload", {}).get("text") or "").strip()
-        ]
+        pairs: list[tuple[dict, str]] = []
+        for point in head:
+            text = point.get("payload", {}).get("text")
+            # Same guard as the TEI path: a missing or non-string text is skipped,
+            # never sent as an empty passage.
+            if isinstance(text, str) and text.strip():
+                pairs.append((point, text))
+
+        # Nothing scoreable in the head is a TEI answer, not an empty result.
+        if not pairs:
+            return await self._rerank_tei(query_text, points, top_k)
+
+        semaphore = asyncio.Semaphore(JEV_CONCURRENCY)
+
+        async def score(point: dict, text: str) -> float:
+            async with semaphore:
+                return await self._jev_score(query_text, text)
 
         # ponytail: one bad pair falls back for the whole request instead of mixing
         # two score scales in one result list. Jev failures are correlated (key,
         # 429, egress), not per-pair, so paying one TEI call is the cheap side of
-        # that bet. gather's first exception cancels nothing, but the losers are
-        # already in flight and finish on their own.
-        semaphore = asyncio.Semaphore(JEV_CONCURRENCY)
-
-        async def score(point: dict) -> float:
-            async with semaphore:
-                return await self._jev_score(query_text, point["payload"]["text"])
-
+        # that bet. The tasks are cancelled rather than left running, and the stage
+        # has one deadline so N waves of a slow endpoint cannot stall a search.
+        tasks = [asyncio.create_task(score(point, text)) for point, text in pairs]
         try:
-            scores = await asyncio.gather(*(score(point) for point in valid))
+            async with asyncio.timeout(JEV_STAGE_TIMEOUT):
+                scores = await asyncio.gather(*tasks)
         except Exception:
+            for task in tasks:
+                task.cancel()
+            logger.warning(
+                "jev rerank failed; falling back to the cross-encoder", exc_info=True
+            )
             return await self._rerank_tei(query_text, points, top_k)
 
-        for point, value in zip(valid, scores):
+        for (point, _), value in zip(pairs, scores):
             point["reranker_score"] = value
 
+        valid = [point for point, _ in pairs]
         valid.sort(key=lambda point: point["reranker_score"], reverse=True)
         return (valid + points[len(head) :])[:top_k]
 

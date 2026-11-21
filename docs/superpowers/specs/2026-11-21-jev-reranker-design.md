@@ -76,6 +76,10 @@ the cross-encoder already liked — it cannot rescue a good chunk TEI buried.
 | `JEV_MODEL` | `jev-1.13-free` | pinned id; the alias moves under a tuned threshold |
 | `JEV_POOL` | `24` | how many candidates Jev sees |
 
+`JEV_STAGE_TIMEOUT` (15 s) and `JEV_CONCURRENCY` (8) are module constants in
+`retrieval/retrieve.py`, not environment: one deadline for the whole stage, not per
+request, so N waves of a slow endpoint cannot stall a search.
+
 No `JEV_RERANK=on` needed: a present key enables it. `JEV_RERANK=off` is the kill
 switch, and deleting the key does the same thing.
 
