@@ -76,6 +76,7 @@ from retrieval import (
 from api.users import get_or_create_user_by_telegram_id
 from identity import Unauthorized, current_user_id, resolve_identity
 from api.providers import resolve_model_config
+from provider_url import opencode_session_headers
 
 logger = logging.getLogger("api.chat")
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -194,6 +195,7 @@ def _build_agent(
     provider_url: str,
     api_key: str | None,
     variant: str,
+    session_id: str | None = None,
 ) -> Agent:
     """Build a PydanticAI Agent for OpenAI, Anthropic, OpenRouter, DeepSeek, or other compatible providers."""
 
@@ -230,13 +232,23 @@ def _build_agent(
             api_key=os.environ.get("FREE_PROVIDER_API_KEY"),
         )
         model = OpenAIChatModel(model_name, provider=provider)
-        model_settings = OpenAIChatModelSettings(temperature=0.5)
+        model_settings = OpenAIChatModelSettings(
+            temperature=0.5,
+            extra_headers=opencode_session_headers(
+                os.environ.get("FREE_PROVIDER_URL"), session_id
+            )
+            or None,
+        )
     else:
         # Default to OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Mistral, etc.)
         provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
         model = OpenAIChatModel(model_name, provider=provider)
 
         settings_kwargs = {"temperature": 0.5}
+        # OpenCode Zen/Go refuse to route a request with no session id.
+        session_headers = opencode_session_headers(provider_url, session_id)
+        if session_headers:
+            settings_kwargs["extra_headers"] = session_headers
         if provider_slug == "openai":
             settings_kwargs["openai_service_tier"] = "flex"
             if variant:
@@ -377,6 +389,7 @@ async def stream(
         provider_url=provider_url,
         api_key=api_key,
         variant=variant,
+        session_id=session_id,
     )
 
     history = await asyncio.to_thread(load_session, session_id)

@@ -16,6 +16,7 @@ from provider_url import (
     UpstreamBodyTooLarge,
     allow_insecure_for,
     assert_safe_provider_url,
+    opencode_session_headers,
     safe_get_json,
     sanitize_extra_headers,
 )
@@ -267,3 +268,20 @@ def test_safe_get_json_never_parses_an_error_body(monkeypatch):
 def test_safe_get_json_tolerates_a_non_json_body(monkeypatch):
     _fake_client(monkeypatch, 200, b"<html>nope</html>")
     assert safe_get_json("https://api.example.test/v1/models") == (200, None)
+
+
+def test_opencode_session_header_only_for_opencode_hosts():
+    assert opencode_session_headers("https://opencode.ai/zen/v1", "abc") == {
+        "x-opencode-session": "elimam-abc"
+    }
+    assert opencode_session_headers(
+        "https://opencode.ai/inference/go/v1", "abc"
+    ) == {"x-opencode-session": "elimam-abc"}
+    # Everyone else gets nothing.
+    assert opencode_session_headers("https://api.anthropic.com", "abc") == {}
+    # A lookalike host must never receive a session id.
+    assert opencode_session_headers("https://evil-opencode.ai/x", "abc") == {}
+    # No chat session yet: still routable, and unique per request.
+    first = opencode_session_headers("https://opencode.ai/v1", None)["x-opencode-session"]
+    second = opencode_session_headers("https://opencode.ai/v1", None)["x-opencode-session"]
+    assert first != second and first.startswith("elimam-")

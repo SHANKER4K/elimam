@@ -143,6 +143,21 @@ def _is_unsafe_address(address: str, *, allow_insecure: bool) -> bool:
     return False
 
 
+def opencode_session_headers(url: str | None, session_id: str | None) -> dict[str, str]:
+    """The ``x-opencode-session`` header, when ``url`` is an opencode.ai endpoint.
+
+    OpenCode Go routes a request per conversation and answers one that carries
+    no session id with "Request is missing x-opencode-session and cannot be
+    routed efficiently". The caller's chat session *is* that conversation, so
+    the id is stable per thread and differs between users.
+    """
+    host = (urlsplit(url or "").hostname or "").lower()
+    if host != "opencode.ai" and not host.endswith(".opencode.ai"):
+        return {}
+    suffix = session_id or os.urandom(8).hex()
+    return {"x-opencode-session": f"elimam-{suffix}"}
+
+
 def sanitize_extra_headers(raw: dict | None) -> dict[str, str]:
     """Validate user-supplied extra headers, or raise UnsafeProviderUrl."""
     if raw is None:
