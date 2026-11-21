@@ -10,13 +10,14 @@ Monorepo layout:
 - `server.py` — FastAPI app (run from repo root)
 - `api/` — routers: `chat`, `users`, `sessions`, `keys`, `messages`,
   `providers`, `me_providers`, `search`
-- `search.py` — the only search layer (dense + BM25 sparse + RRF hybrid, TEI +
-  reranker + Qdrant)
+- `retrieval/` — the only search layer (`Retrieval` class: dense + BM25 sparse +
+  RRF hybrid, TEI reranker + Qdrant), the agent tools, citation refill, static
+  book lists
 - `identity.py` — auth resolution (pure module, unit-testable)
 - `db/connection.py` — psycopg2 pool (only file in `db/`)
 - `skills/turath-index-skill.md` — LLM system prompt + collection/filter docs
 - `telegram_bot/` — aiogram bot (own venv/pyproject, HTTP-only, never touches DB)
-- `server_mcp.py` — MCP server exposing the same search tools
+- `server_mcp.py` — MCP server (FastMCP "El Imam") over the same `retrieval` tools
 - `notebooks/` — ingestion (`update_db.ipynb` populates Qdrant)
 
 ## Stack
@@ -162,8 +163,8 @@ Known gaps (see `skills/turath-index-skill.md`): no Sahih Muslim;
 sources, else *"لم أجد معلومات كافية في المصادر المتاحة."*
 
 `POST /chat` tools are wired in `api/chat.py`; the same functions are exposed
-over MCP in `server_mcp.py` (`El Imam`: `get_quran`, `get_tafsir`,
-`dense/sparse/hybrid_search`, …).
+over MCP in `server_mcp.py` (`El Imam`: `search`, `get_quran`, `get_tafsir`,
+`find_book`, `get_chunk`, …).
 
 ## Telegram bot (`telegram_bot/`)
 
@@ -189,8 +190,9 @@ pytest tests/  # rest need docker compose up + populated Qdrant + models
 - `tests/test_providers_config.py` — standalone catalog test
 - `tests/test_identity.py`, `test_route_coverage.py` — auth/route coverage
   (pure `identity.py`, no DB)
-- `temp/test_search.py` — integration test, needs populated Qdrant (~148k
-  points) + models; fails on fresh checkout
+- `tests/test_retrieval.py`, `test_citations.py`, `test_books_fuzzy.py`,
+  `test_tool_presenter.py`, `test_seed_text.py` — retrieval, citation refill,
+  fuzzy titles, tool presentation and index/query parity; all need no Qdrant
 - `tests/test_dahl_*.py` — ad-hoc debug scripts, not pytest tests
 
 ## Project structure
@@ -199,14 +201,15 @@ pytest tests/  # rest need docker compose up + populated Qdrant + models
 server.py              FastAPI app, middleware (request-id log, identity, CORS), routers
 identity.py            pure auth module (HMAC user sig / bot secret, guards)
 api/chat.py            pydantic-ai agent + SSE + session persistence
-api/search.py          thin caps (top_k/rerank_pool) over search.py
+api/search.py          thin caps (top_k/rerank_pool) over retrieval.retrieve()
 api/providers.py       DB-backed catalog (cached) + resolve_model_config
 api/me_providers.py    user connections + model sync (user-facing)
+api/tool_presenter.py  Arabic label/subtitle/summary for the tool SSE events
 api/users|sessions|messages|keys.py   raw-SQL CRUD
-search.py              embeddings/sparse/RRF/rerank/Qdrant + filters + getters
+retrieval/             Retrieval class, filters, tools, citations, static titles
 db/connection.py       psycopg2 ThreadedConnectionPool + get_conn/close_pool
 skills/turath-index-skill.md  agent system prompt + corpus docs
-server_mcp.py          FastMCP "El Imam" over search tools
+server_mcp.py          FastMCP "El Imam" over the retrieval tools
 telegram_bot/app/      aiogram bot (handlers/, backend.py, config.py, states.py)
 notebooks/             ingestion (update_db.ipynb + per-corpus builders)
 nginx/nginx.conf       reverse proxy; certbot/ for TLS

@@ -24,7 +24,7 @@ So unit tests that avoid importing these modules fail fast; anything touching th
 
 - `docker compose up` = backend (`:8000`) + telegram bot + nginx + omniroute. Qdrant and Postgres are **external**: `QDRANT_URL` and the `DATABASE_*` vars come from `.env`. Needs `.env` secrets (`TELEGRAM_BOT_TOKEN`, `BOT_SHARED_SECRET`, `ENCRYPTION_MASTER_KEY`).
 - DB migrations are applied from the frontend (`cd ../frontend && bun run db:generate && bun run db:migrate`); this service never runs DDL. `db/` contains exactly one file, `connection.py` (the psycopg2 pool) — do not add Drizzle artifacts here.
-- Tests: `temp/test_search.py` is an integration test — requires a *populated* Qdrant (~148k book points) and the models, so it fails on a fresh checkout. `tests/test_providers_config.py` is standalone and self-sufficient. `tests/test_dahl_*.py` are ad-hoc debug scripts, not pytest tests.
+- Tests: `tests/` needs no Qdrant, TEI or models (`test_retrieval`, `test_citations`, `test_books_fuzzy`, `test_tool_presenter`, `test_seed_text`, `test_providers_config` are all standalone). Anything that actually calls `retrieval.retrieve(...)` needs `docker compose up` and a populated Qdrant. `tests/test_dahl_*.py` are ad-hoc debug scripts, not pytest tests.
 
 ## Dependency manifests have drifted
 

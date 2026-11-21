@@ -13,7 +13,7 @@ flowchart TD
   providers["api/providers.py"]
   meprov["api/me_providers.py"]
   apisearch["api/search.py"]
-  search["search.py"]
+  search["retrieval/"]
   identity["identity.py"]
   providerurl["provider_url.py"]
   dbconn["db/connection.py"]
@@ -88,7 +88,7 @@ Import-time coupling (the reason tests need the stack):
 | Module | Side effect at import |
 | --- | --- |
 | `db/connection.py` | builds the psycopg2 pool from `DATABASE_*` in `.env` |
-| `search.py` | loads GATE-AraBert-v1, the cross-encoder and BM25, connects to Qdrant |
+| `retrieval/` | Qdrant client, TEI clients and the BM25 model are created lazily on first call, so importing it is free |
 | `api/chat.py` | calls `setup_indexes()` and reads `./skills/turath-index-skill.md` |
 | `api/providers.py` | lazy — reads the `providers` table on first use, then caches in-process |
 | `identity.py`, `provider_url.py` | pure, no DB/model imports (unit-testable standalone) |
