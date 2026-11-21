@@ -20,6 +20,11 @@ services:
       # Vector search
       - QDRANT_URL=${QDRANT_URL}
       - QDRANT_API_KEY=${QDRANT_API_KEY}
+      # Jev reranker. /app/.env is mounted too, but every secret is listed here.
+      - JEV_API_URL=${JEV_API_URL:-https://opencode.ai/inference/systemone/v1/systemone}
+      - JEV_API_KEY=${JEV_API_KEY:-}
+      - JEV_MODEL=${JEV_MODEL:-jev-1.13-free}
+      - JEV_RERANK=${JEV_RERANK:-on}
       - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
 
       # Database
