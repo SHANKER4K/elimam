@@ -7,6 +7,8 @@ retrieval machinery behind them lives in `retrieve.Retrieval` and raises.
 
 from typing import Any
 
+from rapidfuzz import fuzz, process
+
 from .books import BOOKS_LIST, CATEGORIES_NAMES, SUNNAH_BOOKS
 from .retrieve import CollectionName, retrieval
 from .schemas import (
@@ -185,3 +187,114 @@ def get_books_categories() -> list:
         Fresh copy of CATEGORIES_NAMES (e.g. 'العقيدة', ...).
     """
     return list(CATEGORIES_NAMES)
+
+
+# -----------------------------
+# Fuzzy title lookup
+# -----------------------------
+
+# The listings carry the edition suffix ("- ط عطاءات العلم"), so an exact
+# book_name filter is unusable from a loose request like "شرح الطحاوية". These
+# helpers map loose names onto the exact titles the filter needs.
+#
+# ponytail: token_set_ratio for titles — measured on the real list, WRatio ranks
+# an unrelated book first for "شرح الطحاوية" (الدرة البهية at 86) while
+# token_set_ratio puts all three الطحاوية editions at 100 and is insensitive to
+# the extra edition words. Categories are a short list of prefix-heavy names, so
+# partial_ratio fits them better ("سنه" -> "كتب السنة"). Known ceiling: a typo
+# sharing no token scores weakly; upgrade path is a per-token Levenshtein pass.
+#
+# Cutoffs calibrated over all 260 titles (query = first two words): every real
+# query scores 100 (token_set treats it as a subset), while absent books sit at
+# 53-74 ("صحيح البخاري" -> 74, "رياض الصالحين" -> 70). 80 keeps every real hit
+# and drops all of them. Categories get 70: eight known options, and the caller
+# can always fall back to get_books_categories.
+FUZZY_CUTOFF = 80
+CATEGORY_CUTOFF = 70
+
+
+def _fold(text: str) -> str:
+    """Normalize for fuzzy matching only.
+
+    `preprocess()` must stay index-compatible (the stored vectors were built
+    without teh-marbuta folding), so the fold happens here instead: it is what
+    makes "عقيده" reach "العقيدة".
+    """
+    return retrieval.preprocess(text).replace("ة", "ه")
+
+
+_BOOKS_NORMALIZED = [_fold(title) for title in BOOKS_LIST]
+_SUNNAH_NORMALIZED = [_fold(title) for title in SUNNAH_BOOKS]
+_CATEGORIES_NORMALIZED = [_fold(name) for name in CATEGORIES_NAMES]
+
+
+def _fuzzy(
+    query: str,
+    titles: list[str],
+    normalized: list[str],
+    limit: int,
+    scorer,
+    score_cutoff: float,
+) -> list[dict]:
+    matches = process.extract(
+        _fold(query),
+        normalized,
+        scorer=scorer,
+        limit=limit,
+        score_cutoff=score_cutoff,
+    )
+    # `matches` yields (normalized_choice, score, index into `titles`).
+    return [
+        {"title": titles[index], "score": round(float(score), 1)}
+        for _, score, index in matches
+    ]
+
+
+def find_book(
+    name: str,
+    collection: CollectionName = "books",
+    limit: int = 5,
+) -> list[dict]:
+    """Find the exact book title to use in a `book_name` filter.
+
+    Pass the user's loose book name (`شرح الطحاوية`, `منهاج السنة`); returns the
+    matching titles from the corpus, best first, each with a 0-100 score. Two
+    editions of the same book are separate titles — pick deliberately. An empty
+    list means the book is not in the corpus: do not invent a title.
+
+    Returns:
+        [{"title": "شرح العقيدة الطحاوية - ط الرسالة", "score": 100.0}, ...]
+    """
+    if collection == "sunnah":
+        return _fuzzy(
+            name,
+            SUNNAH_BOOKS,
+            _SUNNAH_NORMALIZED,
+            limit,
+            fuzz.token_set_ratio,
+            FUZZY_CUTOFF,
+        )
+    return _fuzzy(
+        name,
+        BOOKS_LIST,
+        _BOOKS_NORMALIZED,
+        limit,
+        fuzz.token_set_ratio,
+        FUZZY_CUTOFF,
+    )
+
+
+def find_category(name: str, limit: int = 8) -> list[dict]:
+    """Find the exact category name to use in a `category_name` filter.
+
+    Returns:
+        [{"title": "العقيدة", "score": 100.0}, ...]
+    """
+    return _fuzzy(
+        name,
+        CATEGORIES_NAMES,
+        _CATEGORIES_NORMALIZED,
+        limit,
+        fuzz.partial_ratio,
+        CATEGORY_CUTOFF,
+    )
