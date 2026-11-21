@@ -141,3 +141,49 @@ def test_search_tool_clamps_top_k(monkeypatch):
     asyncio.run(tools.search("quran", "الرحمن", top_k=5000))
 
     assert seen["top_k"] == tools.MAX_TOP_K
+
+
+def test_compact_hit_drops_the_full_text():
+    point = {
+        "id": 1,
+        "reranker_score": 0.87,
+        "payload": {
+            "ids": "2:255",
+            "text": "ا" * 900,
+            "surah": "البقرة",
+            "ayah_number": 255,
+            "headers_tree": {"nested": True},
+        },
+    }
+
+    row = tools._compact("quran", point)
+
+    assert row["ids"] == "2:255"
+    assert row["score"] == 0.87
+    assert row["surah"] == "البقرة"
+    assert row["preview"].endswith("…")
+    assert len(row["preview"]) == tools.PREVIEW_CHARS + 1
+    # full text and bulk payload never leave the server
+    assert "text" not in row and "headers_tree" not in row
+
+
+def test_compact_keeps_collection_specific_labels():
+    hadith = tools._compact(
+        "hadith",
+        {"payload": {"ids": "bukhari:1.0", "text": "نص", "book": "bukhari", "grade": "صحيح"}},
+    )
+    assert hadith["book"] == "bukhari" and hadith["grade"] == "صحيح"
+
+    book = tools._compact(
+        "books",
+        {"payload": {"ids": "0:12:3", "text": "نص", "book_name": "الزهد", "surah": "x"}},
+    )
+    assert book["book_name"] == "الزهد"
+    assert "surah" not in book  # not a books field
+
+
+def test_get_chunk_delegates_to_by_id(monkeypatch):
+    monkeypatch.setattr(
+        tools, "retrieval", SimpleNamespace(by_id=lambda c, i: {"collection": c, "id": i})
+    )
+    assert tools.get_chunk("quran", "2:255") == {"collection": "quran", "id": "2:255"}

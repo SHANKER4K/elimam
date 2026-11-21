@@ -63,10 +63,13 @@ from api.sessions import SessionCreate, create_web_session, get_session
 from db.connection import get_conn
 
 from retrieval import (
+    find_book,
+    find_category,
     get_book,
     get_books_books,
     get_books_categories,
     get_books_sunnah,
+    get_chunk,
     get_hadith,
     get_quran,
     get_tafsir,
@@ -148,6 +151,9 @@ tools = FunctionToolset(
         get_books_books,
         get_books_sunnah,
         get_books_categories,
+        get_chunk,
+        find_book,
+        find_category,
         search,
     ],
     # defer_loading=True,
