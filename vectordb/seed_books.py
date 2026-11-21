@@ -16,7 +16,8 @@ from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, VectorParams, SparseVectorParams, PointStruct, Modifier
 from sentence_transformers import SentenceTransformer
 from fastembed import SparseTextEmbedding
-from pyarabic.araby import normalize_alef, strip_diacritics
+
+from _text import clean
 
 # =========================
 # Configuration
@@ -40,11 +41,8 @@ UPSERT_BATCH_SIZE = 256     # Qdrant upsert batch
 # =========================
 
 def clean_text(text: str) -> str:
-    text = strip_diacritics(text)
-    text = normalize_alef(text)
-    text = text.replace("\u200f", "")  # Remove RTL mark
-    text = text.replace("  ", " ")     # Collapse double spaces
-    return text.strip()
+    """Same definition the query side uses; see vectordb/_text.py."""
+    return clean(text)
 
 # =========================
 # Metadata Functions
