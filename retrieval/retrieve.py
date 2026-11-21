@@ -9,6 +9,7 @@ importing this module needs no Qdrant, no model download, and no network.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from functools import cached_property
 from typing import Literal
@@ -155,6 +156,16 @@ class Retrieval:
     # Reranking
     # -----------------------------
 
+    async def _rerank_batch(self, query_text: str, batch: list[str]) -> list[dict]:
+        """One TEI /rerank call; returns [{"index": i, "score": s}, ...]."""
+        response = await self.reranker_client.post(
+            "/rerank",
+            json={"query": query_text, "texts": batch, "top_n": len(batch)},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def rerank(
         self,
         query_text: str,
@@ -179,20 +190,16 @@ class Retrieval:
             return points[:top_k]
 
         # 2. TEI caps a /rerank request at max_client_batch_size texts, so send
-        # candidates in chunks and offset indices back into `texts`.
-        for start in range(0, len(texts), self.rerank_batch_size):
-            batch = texts[start : start + self.rerank_batch_size]
+        # candidates in chunks and offset indices back into `texts`. The chunks
+        # are independent, so they run concurrently; at most a handful per call.
+        starts = range(0, len(texts), self.rerank_batch_size)
+        batches = [texts[start : start + self.rerank_batch_size] for start in starts]
+        batch_results = await asyncio.gather(
+            *(self._rerank_batch(query_text, batch) for batch in batches)
+        )
 
-            # TEI /rerank: required "query" + "texts", optional "top_n".
-            response = await self.reranker_client.post(
-                "/rerank",
-                json={"query": query_text, "texts": batch, "top_n": len(batch)},
-                timeout=60.0,
-            )
-            response.raise_for_status()
-
-            # TEI returns [{"index": i, "score": s}, ...] relative to this batch.
-            for result in response.json():
+        for start, results in zip(starts, batch_results):
+            for result in results:
                 valid_points[start + result["index"]]["reranker_score"] = float(
                     result["score"]
                 )

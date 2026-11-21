@@ -6,8 +6,9 @@ every one of these assertions was unreachable without the full stack running.
 """
 
 import asyncio
+from types import SimpleNamespace
 
-from retrieval import Retrieval, get_books_books, get_books_sunnah
+from retrieval import Retrieval, get_books_books, get_books_sunnah, tools
 from retrieval.schemas import HadithFilters, QuranFilters, QuranSearchRequest
 
 
@@ -127,3 +128,16 @@ def test_retrieve_dispatches_on_mode():
         ) == []
 
     assert calls == ["quran", "quran", "quran"]
+
+
+def test_search_tool_clamps_top_k(monkeypatch):
+    seen = {}
+
+    async def fake_retrieve(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(tools, "retrieval", SimpleNamespace(retrieve=fake_retrieve))
+    asyncio.run(tools.search("quran", "الرحمن", top_k=5000))
+
+    assert seen["top_k"] == tools.MAX_TOP_K

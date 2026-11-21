@@ -28,6 +28,11 @@ _COLLECTION_REQUEST = {
     "sunnah": SunnahSearchRequest,
 }
 
+# ponytail: the HTTP route caps top_k at 100, but the model picks this number and
+# nothing stopped it asking for 5000 candidates — 157 serial TEI rerank round
+# trips inside one tool call. The reranker is batched at 32, so 50 is two batches.
+MAX_TOP_K = 50
+
 
 async def search(
     collection: CollectionName,
@@ -38,11 +43,12 @@ async def search(
     """Search one collection (hybrid dense+BM25 RRF, cross-encoder reranked).
 
     `query_text` must be Arabic; search only the collection relevant to the
-    question. `filters` keys by collection — quran: surah_number, surah;
-    hadith: book, grade; tafsir: surah_number, surah, ayah_number; books:
-    book_id, book_name, category_name, all_authors, author_death, book_date;
-    sunnah: books' keys plus athar_number. Text fields take a str or list[str];
-    numeric fields take an int, list[int], or a range {eq,lt,gt,lte,gte}.
+    question. `top_k` is capped at 50. `filters` keys by collection — quran:
+    surah_number, surah; hadith: book, grade; tafsir: surah_number, surah,
+    ayah_number; books: book_id, book_name, category_name, all_authors,
+    author_death, book_date; sunnah: books' keys plus athar_number. Text fields
+    take a str or list[str]; numeric fields take an int, list[int], or a range
+    {eq,lt,gt,lte,gte}.
     """
     # ponytail: one flat tool replaces dense/sparse/hybrid (2.3k token schema
     # each — the model never chose among them). The generic `filters` dict is
@@ -50,7 +56,7 @@ async def search(
     request = _COLLECTION_REQUEST[collection](
         collection=collection,
         query_text=query_text,
-        top_k=top_k,
+        top_k=min(top_k, MAX_TOP_K),
         filters=filters,
     )
 
