@@ -77,6 +77,7 @@ from retrieval import (
     retrieval,
     search,
 )
+from api.tool_presenter import describe_call, describe_result
 from api.users import get_or_create_user_by_telegram_id
 from identity import Unauthorized, current_user_id, resolve_identity
 from api.providers import resolve_model_config
@@ -397,12 +398,23 @@ async def stream(
                         case ModelRequestNode(request=req):
                             for part in req.parts:
                                 if isinstance(part, ToolReturnPart):
+                                    started = _TOOL_STARTS.pop(part.tool_call_id, None)
+                                    duration_ms = (
+                                        round((time.monotonic() - started) * 1000)
+                                        if started is not None
+                                        else None
+                                    )
                                     yield sse(
                                         "tool_result",
                                         {
                                             "tool_name": part.tool_name,
                                             "tool_call_id": part.tool_call_id,
                                             "content": part.content,
+                                            **describe_result(
+                                                part.tool_name,
+                                                part.content,
+                                                duration_ms,
+                                            ),
                                         },
                                     )
                             async with node.stream(agent_run.ctx) as events:
@@ -456,12 +468,16 @@ async def stream(
                         case CallToolsNode(model_response=resp):
                             for part in resp.parts:
                                 if isinstance(part, ToolCallPart):
+                                    args = part.args_as_dict()
                                     yield sse(
                                         "tool",
                                         {
                                             "text": part.tool_name,
+                                            "tool_name": part.tool_name,
                                             "tool_call_id": part.tool_call_id,
-                                            "args": part.args_as_dict(),
+                                            "args": args,
+                                            "status": "running",
+                                            **describe_call(part.tool_name, args),
                                         },
                                     )
                                 elif isinstance(part, ThinkingPart):
@@ -504,8 +520,16 @@ async def stream(
     yield sse("done", {"output": last_output})
 
 
+# Start times keyed by tool_call_id, so tool_result can report a duration.
+# ponytail: a tool that raises and exhausts retries never produces a
+# ToolReturnPart, so its entry is never popped — bounded by the tool calls in one
+# request; switch to an after_tool_execute hook if that ever grows.
+_TOOL_STARTS: dict[str, float] = {}
+
+
 @hooks.on.before_tool_execute
 async def log_tool_call(ctx, *, call, tool_def, args):
+    _TOOL_STARTS[call.tool_call_id] = time.monotonic()
     logger.info(
         "tool_call",
         extra={"tool": call.tool_name, "tool_call_id": call.tool_call_id},
