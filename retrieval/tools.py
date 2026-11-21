@@ -33,6 +33,43 @@ _COLLECTION_REQUEST = {
 # trips inside one tool call. The reranker is batched at 32, so 50 is two batches.
 MAX_TOP_K = 50
 
+# A `books` chunk is ~600 words; 50 of them in full is tens of thousands of
+# tokens the model rarely reads, and the same JSON goes over SSE to the UI.
+PREVIEW_CHARS = 200
+
+# Per-collection payload fields a UI needs to label a hit. `text` is truncated
+# to `preview`; everything else in the payload (headers trees, embeddings) stays
+# server-side and is reachable through get_chunk().
+_DISPLAY_FIELDS = {
+    "quran": ("surah", "surah_number", "ayah_number"),
+    "hadith": ("book", "grade"),
+    "tafsir": ("tafsir_book", "surah_number", "ayah_number"),
+    "books": ("book_name", "category_name", "all_authors", "author_death"),
+    "sunnah": (
+        "book_name",
+        "category_name",
+        "all_authors",
+        "author_death",
+        "athar_number",
+    ),
+}
+
+
+def _compact(collection: CollectionName, point: dict) -> dict:
+    payload = point.get("payload") or {}
+    text = payload.get("text") or ""
+
+    row = {
+        "collection": collection,
+        "ids": payload.get("ids"),
+        "score": round(point.get("reranker_score", point.get("score")) or 0.0, 4),
+        "preview": text[:PREVIEW_CHARS] + ("…" if len(text) > PREVIEW_CHARS else ""),
+    }
+    for field in _DISPLAY_FIELDS[collection]:
+        if field in payload:
+            row[field] = payload[field]
+    return row
+
 
 async def search(
     collection: CollectionName,
@@ -43,9 +80,12 @@ async def search(
     """Search one collection (hybrid dense+BM25 RRF, cross-encoder reranked).
 
     `query_text` must be Arabic; search only the collection relevant to the
-    question. `top_k` is capped at 50. `filters` keys by collection — quran:
-    surah_number, surah; hadith: book, grade; tafsir: surah_number, surah,
-    ayah_number; books: book_id, book_name, category_name, all_authors,
+    question. `top_k` is capped at 50. Results are compact: `ids`, `score`, a
+    `preview` of the first 200 characters, and the collection's own labels
+    (surah/ayah, book/grade, book_name/category_name). Call `get_chunk` with an
+    `ids` value when you need the full text. `filters` keys by collection —
+    quran: surah_number, surah; hadith: book, grade; tafsir: surah_number,
+    surah, ayah_number; books: book_id, book_name, category_name, all_authors,
     author_death, book_date; sunnah: books' keys plus athar_number. Text fields
     take a str or list[str]; numeric fields take an int, list[int], or a range
     {eq,lt,gt,lte,gte}.
@@ -61,7 +101,7 @@ async def search(
     )
 
     try:
-        return await retrieval.retrieve(
+        points = await retrieval.retrieve(
             collection=request.collection,
             query_text=request.query_text,
             top_k=request.top_k,
@@ -70,6 +110,17 @@ async def search(
         )
     except Exception as exc:
         return [{"error": f"{type(exc).__name__}: {exc}"}]
+
+    return [_compact(collection, point) for point in points]
+
+
+def get_chunk(collection: CollectionName, ids: str) -> dict:
+    """Full payload of one chunk, addressed by the `ids` value from a search hit.
+
+    Use when the 200-character `preview` is not enough — the whole passage is
+    needed for reading or quoting.
+    """
+    return retrieval.by_id(collection, ids)
 
 
 def get_quran(req: QuranId):

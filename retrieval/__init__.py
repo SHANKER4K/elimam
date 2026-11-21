@@ -32,6 +32,7 @@ from .tools import (
     get_books_books,
     get_books_categories,
     get_books_sunnah,
+    get_chunk,
     get_hadith,
     get_quran,
     get_sunnah,
