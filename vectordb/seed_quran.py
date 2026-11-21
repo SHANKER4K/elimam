@@ -10,16 +10,11 @@ from fastembed import SparseTextEmbedding
 import chromadb
 from tqdm import tqdm
 
-from camel_tools.utils.dediac import dediac_ar
-from camel_tools.utils.normalize import (
-    normalize_alef_ar,
-    normalize_teh_marbuta_ar,
-    normalize_alef_maksura_ar,
-)
+from pyarabic.araby import normalize_alef, strip_diacritics
 
 def clean(text):
-    text = dediac_ar(text)
-    text = normalize_alef_ar(text)
+    text = strip_diacritics(text)
+    text = normalize_alef(text)
     text = text.replace("\u200f", "")
     text = text.replace("  ", "")
     return text

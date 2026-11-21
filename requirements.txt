@@ -1,4 +1,4 @@
-camel-tools
+pyarabic
 qdrant_client
 pydantic
 pydantic-ai

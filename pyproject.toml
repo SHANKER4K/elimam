@@ -5,7 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "camel-tools",
   "qdrant-client",
   "telebot",
   "telegramify-markdown",
@@ -15,7 +14,7 @@ dependencies = [
   "fastapi",
   "logfire[httpx]",
   "fastembed",
-  "sentence-transformers",
+  "pyarabic",
   "uvicorn",
   "psycopg2-binary",
   "pyyaml>=6.0,<7",

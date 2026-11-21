@@ -66,7 +66,7 @@ flowchart TD
   search --> qdrant["qdrant_client"]
   search --> st["sentence_transformers (GATE-AraBert-v1, mmarco reranker)"]
   search --> fe["fastembed (Qdrant/bm25)"]
-  search --> camel["camel_tools (dediac, normalize_alef)"]
+  search --> camel["pyarabic (strip_diacritics, normalize_alef)"]
   search --> dbconn
   dbconn -->|"ThreadedConnectionPool"| pg[("PostgreSQL")]
   providerurl --> httpx["httpx + socket/ipaddress"]
