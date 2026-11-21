@@ -29,6 +29,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
     TextPart,
     TextPartDelta,
+    ThinkingPartDelta,
     ModelMessagesTypeAdapter,
 )
 from pydantic_ai.capabilities.hooks import Hooks
@@ -406,28 +407,51 @@ async def stream(
                                     )
                             async with node.stream(agent_run.ctx) as events:
                                 async for event in events:
-                                    if isinstance(event, PartStartEvent) and isinstance(
-                                        event.part, TextPart
-                                    ):
-                                        yield sse(
-                                            "message_start",
-                                            {
-                                                "index": event.index,
-                                                "text": event.part.content,
-                                            },
-                                        )
-                                    elif isinstance(
-                                        event, PartDeltaEvent
-                                    ) and isinstance(event.delta, TextPartDelta):
-                                        yield sse(
-                                            "text_delta",
-                                            {
-                                                "index": event.index,
-                                                "text": event.delta.content_delta,
-                                            },
-                                        )
+                                    if isinstance(event, PartStartEvent):
+                                        if isinstance(event.part, TextPart):
+                                            yield sse(
+                                                "message_start",
+                                                {
+                                                    "index": event.index,
+                                                    "text": event.part.content,
+                                                },
+                                            )
+                                        elif isinstance(event.part, ThinkingPart):
+                                            yield sse(
+                                                "thinking_start",
+                                                {
+                                                    "index": event.index,
+                                                    "id": event.part.id,
+                                                    "provider_name": event.part.provider_name,
+                                                },
+                                            )
+                                    elif isinstance(event, PartDeltaEvent):
+                                        if isinstance(event.delta, TextPartDelta):
+                                            yield sse(
+                                                "text_delta",
+                                                {
+                                                    "index": event.index,
+                                                    "text": event.delta.content_delta,
+                                                },
+                                            )
+                                        elif isinstance(event.delta, ThinkingPartDelta):
+                                            yield sse(
+                                                "thinking_delta",
+                                                {
+                                                    "index": event.index,
+                                                    "text": event.delta.content_delta,
+                                                    "provider_name": event.delta.provider_name,
+                                                },
+                                            )
                                     elif isinstance(event, PartEndEvent):
-                                        yield sse("message_end", {"index": event.index})
+                                        # index + kind let a client close the block
+                                        # it opened, whether text or thinking.
+                                        yield sse(
+                                            "thinking_end"
+                                            if isinstance(event.part, ThinkingPart)
+                                            else "message_end",
+                                            {"index": event.index},
+                                        )
 
                         case CallToolsNode(model_response=resp):
                             for part in resp.parts:
