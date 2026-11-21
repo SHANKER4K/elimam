@@ -78,6 +78,7 @@ from retrieval import (
     search,
 )
 from api.tool_presenter import describe_call, describe_result
+from retrieval.citations import CitationStream, render_citations
 from api.users import get_or_create_user_by_telegram_id
 from identity import Unauthorized, current_user_id, resolve_identity
 from api.providers import resolve_model_config
@@ -293,6 +294,13 @@ def _project_message(m) -> tuple[str, str | None]:
     text = "".join(
         p.content for p in m.parts if isinstance(p, (TextPart, UserPromptPart))
     )
+
+    # Persist the canonical citation tags, so cards re-render after a reload
+    # without persisting tool results. Guarded by "<" to avoid Qdrant lookups
+    # on the (usually tag-free) messages.
+    if role == "assistant" and "<" in text:
+        text = render_citations(text)
+
     return role, text or None
 
 
@@ -389,6 +397,7 @@ async def stream(
 
     history = await asyncio.to_thread(load_session, session_id)
     last_output: Any = None
+    citations = CitationStream()
 
     try:
         async with agent.iter(prompt, message_history=history) as agent_run:
@@ -421,13 +430,18 @@ async def stream(
                                 async for event in events:
                                     if isinstance(event, PartStartEvent):
                                         if isinstance(event.part, TextPart):
+                                            text, cards = citations.feed(
+                                                event.part.content
+                                            )
                                             yield sse(
                                                 "message_start",
                                                 {
                                                     "index": event.index,
-                                                    "text": event.part.content,
+                                                    "text": text,
                                                 },
                                             )
+                                            for card in cards:
+                                                yield sse("citation", card)
                                         elif isinstance(event.part, ThinkingPart):
                                             yield sse(
                                                 "thinking_start",
@@ -439,13 +453,19 @@ async def stream(
                                             )
                                     elif isinstance(event, PartDeltaEvent):
                                         if isinstance(event.delta, TextPartDelta):
-                                            yield sse(
-                                                "text_delta",
-                                                {
-                                                    "index": event.index,
-                                                    "text": event.delta.content_delta,
-                                                },
+                                            text, cards = citations.feed(
+                                                event.delta.content_delta or ""
                                             )
+                                            if text:
+                                                yield sse(
+                                                    "text_delta",
+                                                    {
+                                                        "index": event.index,
+                                                        "text": text,
+                                                    },
+                                                )
+                                            for card in cards:
+                                                yield sse("citation", card)
                                         elif isinstance(event.delta, ThinkingPartDelta):
                                             yield sse(
                                                 "thinking_delta",
@@ -458,12 +478,22 @@ async def stream(
                                     elif isinstance(event, PartEndEvent):
                                         # index + kind let a client close the block
                                         # it opened, whether text or thinking.
-                                        yield sse(
-                                            "thinking_end"
-                                            if isinstance(event.part, ThinkingPart)
-                                            else "message_end",
-                                            {"index": event.index},
-                                        )
+                                        if isinstance(event.part, ThinkingPart):
+                                            yield sse(
+                                                "thinking_end", {"index": event.index}
+                                            )
+                                        else:
+                                            # Anything an unterminated tag was
+                                            # holding back is model output: emit it.
+                                            tail = citations.flush()
+                                            if tail:
+                                                yield sse(
+                                                    "text_delta",
+                                                    {"index": event.index, "text": tail},
+                                                )
+                                            yield sse(
+                                                "message_end", {"index": event.index}
+                                            )
 
                         case CallToolsNode(model_response=resp):
                             for part in resp.parts:
@@ -516,6 +546,11 @@ async def stream(
     except asyncio.CancelledError:
         logger.info("agent_run_cancelled", extra={"session_id": session_id})
         raise
+
+    # The stream carried canonical tags; `output` must agree with it, or a client
+    # that renders on `done` would show the model's raw markup.
+    if last_output and "<" in last_output:
+        last_output = await asyncio.to_thread(render_citations, last_output)
 
     yield sse("done", {"output": last_output})
 

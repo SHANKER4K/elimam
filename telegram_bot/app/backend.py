@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
 from aiogram.types.message import Message
 import httpx
 from telegramify_markdown import markdownify
+
+# The backend streams citation tags (`<quran id="2:255">…</quran>`) for the web UI
+# to render as cards. Telegram has no such renderer, so keep the words and drop
+# the markup; the model's own prose still names the source.
+_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
+
+
+def _plain(text: str) -> str:
+    return _TAG_RE.sub("", text)
 
 
 class BackendError(RuntimeError):
@@ -360,17 +370,17 @@ class BackendClient:
                     if event == "message_start":
                         text = payload.get("text")
                         if text:
-                            yield text
+                            yield _plain(text)
                     if event == "text_delta":
                         text = payload.get("text")
                         if text:
-                            yield text
+                            yield _plain(text)
                     elif event in {"done", "message_end"}:
                         if event == "done":
                             break
                     elif event is None:
                         text = payload.get("text")
                         if text:
-                            yield text
+                            yield _plain(text)
         except httpx.HTTPError as exc:
             raise BackendError("Could not connect to the backend") from exc
