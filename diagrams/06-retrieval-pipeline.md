@@ -1,6 +1,6 @@
 # Retrieval Pipeline
 
-How query → embedding → hybrid search → reranking works in `search.py`.
+How query → embedding → hybrid search → reranking works in `retrieval/retrieve.py`.
 
 ```mermaid
 flowchart TD
