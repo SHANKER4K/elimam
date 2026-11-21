@@ -34,6 +34,10 @@ services:
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
       - DATABASE_PORT=5432
 
+      # Tracing: Logfire cloud (primary, empty = local no-op). Opik stays
+      # OTLP-driven below: the endpoint also gates OpikSpanProcessor in server.py.
+      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN:-}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       # Opik tracing: logfire exports Pydantic AI spans over OTLP.
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_EXPORTER_OTLP_HEADERS=${OTEL_EXPORTER_OTLP_HEADERS}

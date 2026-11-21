@@ -36,8 +36,8 @@ from opik.integrations.otel import OpikSpanProcessor
 # stdlib logging only; JSON lines to stdout so `docker compose logs backend`
 # and the local uvicorn terminal both give greppable, timestamped, level-tagged
 # records with per-request correlation from REQUEST_ID_CONTEXT.
-# ponytail: no structlog/loguru/Sentry/OTLP; add Sentry when you want
-# push-notified failures, OTel spans when you need cross-service latency.
+# ponytail: no structlog/loguru/Sentry; add Sentry when you want push-notified
+# failures. Tracing is logfire below, driven entirely by env.
 REQUEST_ID_CONTEXT: contextvars.ContextVar[str] = contextvars.ContextVar(
     "request_id", default="-"
 )
@@ -98,11 +98,30 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Islamic Scholar API", lifespan=lifespan)
 
+# ── Tracing (issue #19): Logfire cloud is the primary sink, env-driven ──────
+# - LOGFIRE_TOKEN set                  -> spans ship to Logfire
+# - OTEL_EXPORTER_OTLP_ENDPOINT set    -> spans ship over OTLP (today: Opik,
+#   wired in docker-compose with its headers; this is also what gates
+#   OpikSpanProcessor, the ID-propagation glue for cross-process traces)
+# Neither set -> local no-op, exactly the pre-logfire-cloud behavior.
+# ponytail: no psycopg2 DB spans - instrument_psycopg is psycopg3-only; upgrade
+# path is opentelemetry-instrumentation-psycopg2 if DB query spans are needed.
 logfire.configure(
-    send_to_logfire=False,
-    additional_span_processors=[OpikSpanProcessor()],
+    send_to_logfire=bool(os.environ.get("LOGFIRE_TOKEN")),
+    environment=os.environ.get("ENVIRONMENT", "development"),
+    additional_span_processors=[OpikSpanProcessor()]
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    else [],
 )
-logfire.instrument_pydantic_ai()
+# Redaction (the issue's non-negotiable): include_content=False keeps prompts,
+# answers and tool arguments out of every trace destination - users' religious
+# Q&A never leaves the server. Provider keys are safe regardless:
+# instrument_httpx does not capture headers, and api/keys.py never logs keys.
+logfire.instrument_pydantic_ai(include_content=False)
+# Every provider request in _build_agent rides httpx - this gives per-request
+# latency + token-usage spans for OpenAI/Anthropic/Groq/Mistral/DeepSeek/...
+logfire.instrument_httpx()
+logfire.instrument_fastapi(app)
 
 
 @app.middleware("http")

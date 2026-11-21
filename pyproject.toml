@@ -13,6 +13,7 @@ dependencies = [
   "pydantic-harness",
   "fastapi",
   "logfire[httpx]",
+"logfire[fastapi]",
   "fastembed",
   "pyarabic",
   "uvicorn",

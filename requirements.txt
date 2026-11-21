@@ -9,6 +9,7 @@ pydantic-ai-slim[xai]
 opik
 fastapi
 logfire[httpx]
+logfire[fastapi]
 fastembed
 uvicorn
 psycopg2-binary
