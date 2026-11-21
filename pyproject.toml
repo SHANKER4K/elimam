@@ -15,6 +15,7 @@ dependencies = [
   "logfire[httpx]",
   "fastembed",
   "pyarabic",
+  "rapidfuzz",
   "uvicorn",
   "psycopg2-binary",
   "pyyaml>=6.0,<7",
