@@ -247,6 +247,48 @@ class Retrieval:
         points: list[dict],
         top_k: int,
     ) -> list[dict]:
+        """Re-rank with Jev, or with the cross-encoder when Jev is off or fails."""
+        if not points or not self.jev_enabled:
+            return await self._rerank_tei(query_text, points, top_k)
+
+        # Jev is one HTTP round trip per pair, so it only ever sees the head of the
+        # pool — but never fewer candidates than the caller asked to be returned.
+        head = points[: min(len(points), max(top_k, self.jev_pool))]
+        valid = [
+            point
+            for point in head
+            if (point.get("payload", {}).get("text") or "").strip()
+        ]
+
+        # ponytail: one bad pair falls back for the whole request instead of mixing
+        # two score scales in one result list. Jev failures are correlated (key,
+        # 429, egress), not per-pair, so paying one TEI call is the cheap side of
+        # that bet. gather's first exception cancels nothing, but the losers are
+        # already in flight and finish on their own.
+        semaphore = asyncio.Semaphore(JEV_CONCURRENCY)
+
+        async def score(point: dict) -> float:
+            async with semaphore:
+                return await self._jev_score(query_text, point["payload"]["text"])
+
+        try:
+            scores = await asyncio.gather(*(score(point) for point in valid))
+        except Exception:
+            return await self._rerank_tei(query_text, points, top_k)
+
+        for point, value in zip(valid, scores):
+            point["reranker_score"] = value
+
+        valid.sort(key=lambda point: point["reranker_score"], reverse=True)
+        return (valid + points[len(head) :])[:top_k]
+
+    async def _rerank_tei(
+        self,
+        query_text: str,
+        points: list[dict],
+        top_k: int,
+    ) -> list[dict]:
+        """The local cross-encoder path, and the fallback when Jev is unavailable."""
         if not points:
             return points
 

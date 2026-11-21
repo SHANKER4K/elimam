@@ -101,7 +101,9 @@ def test_rerank_batches_and_maps_indices_back():
     # 40 candidates at 16 per batch = 3 TEI calls; the index offset is the part
     # that silently breaks (every point must keep its own score).
     points = [{"id": i, "payload": {"text": "ن" * (i + 1)}} for i in range(40)]
-    r = Retrieval(url="http://127.0.0.1:1", rerank_batch_size=16)
+    r = Retrieval(
+        url="http://127.0.0.1:1", rerank_batch_size=16, jev_api_key=""
+    )  # jev_api_key="": a filled-in .env must not route this test through Jev
     fake = _FakeReranker()
     r.__dict__["reranker_client"] = fake
 
