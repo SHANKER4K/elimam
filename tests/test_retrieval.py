@@ -9,7 +9,7 @@ import asyncio
 from types import SimpleNamespace
 
 from retrieval import Retrieval, get_books_books, get_books_sunnah, tools
-from retrieval.schemas import HadithFilters, QuranFilters, QuranSearchRequest
+from retrieval.schemas import HadithFilters, HadithId, QuranFilters, QuranId, QuranSearchRequest, TafsirId
 
 
 def test_constructing_and_filtering_creates_no_clients():
@@ -143,3 +143,55 @@ def test_search_tool_clamps_top_k(monkeypatch):
     asyncio.run(tools.search("quran", "الرحمن", top_k=5000))
 
     assert seen["top_k"] == tools.MAX_TOP_K
+
+
+def test_by_hadith_filters_on_book_and_number_not_ids():
+    # The hadith collection payload has no `ids` field (only quran/tafsir/
+    # books/sunnah carry one), so looking a hadith up by `ids` can never match.
+    seen = {}
+
+    class _FakeClient:
+        def scroll(self, collection_name, scroll_filter, with_vectors=False):
+            seen["collection"] = collection_name
+            seen["must"] = scroll_filter.must
+            return [
+                SimpleNamespace(
+                    payload={"book": "bukhari", "hadith_number": 1.0, "text": "t"}
+                )
+            ], None
+
+    r = Retrieval(url="http://127.0.0.1:1")
+    r.__dict__["client"] = _FakeClient()
+    out = r.by_hadith("bukhari", 1)
+
+    assert seen["collection"] == "hadith"
+    book, number = seen["must"]
+    assert book.key == "book" and book.match.value == "bukhari"
+    assert number.key == "hadith_number"
+    assert number.range.gte == number.range.lte == 1
+    assert out["ids"] == "bukhari:1.0", "the citation id convention is book:number"
+    assert out["text"] == "t"
+
+
+def test_every_get_tool_wires_the_right_lookup(monkeypatch):
+    seen = []
+    fake = SimpleNamespace(
+        by_id=lambda collection, key: seen.append((collection, key)) or {"collection": collection},
+        by_hadith=lambda book, number: seen.append(("hadith", f"{book}:{float(number)}")) or {"collection": "hadith"},
+    )
+    monkeypatch.setattr(tools, "retrieval", fake)
+
+    tools.get_quran(QuranId(ids="1:1"))
+    tools.get_tafsir(TafsirId(book="saadi", ids="1:1"))
+    tools.get_book(1, 2, 3)
+    tools.get_sunnah(4, 5, 6)
+    tools.get_hadith(HadithId(book="bukhari", hadith_number=1))
+
+    assert seen == [
+        ("quran", "1:1"),
+        ("tafsir", "saadi:1:1"),
+        ("books", "1:2:3"),
+        ("sunnah", "4:5:6"),
+        ("hadith", "bukhari:1.0"),
+    ]
+

@@ -491,6 +491,37 @@ class Retrieval:
         )
         return points[0].payload if points else []
 
+    def by_hadith(self, book: str, hadith_number: float):
+        """Fetch a hadith by book + number.
+
+        The hadith collection has no `ids` payload field (the seed never wrote
+        one), so `by_id` cannot find it - the identity lives in book +
+        hadith_number. Range [n, n] is the numeric match: MatchValue rejects
+        floats, and has been the source of silent empty lookups.
+        """
+        points, _ = self.client.scroll(
+            collection_name="hadith",
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="book", match=models.MatchValue(value=book)
+                    ),
+                    models.FieldCondition(
+                        key="hadith_number",
+                        range=models.Range(gte=hadith_number, lte=hadith_number),
+                    ),
+                ]
+            ),
+            with_vectors=False,
+        )
+        if not points:
+            return []
+        payload = dict(points[0].payload)
+        # Same id convention the citation registry will use (issue #7):
+        # hadith -> "book:number", number kept as the stored float.
+        payload.setdefault("ids", f"{book}:{float(hadith_number)}")
+        return payload
+
     # -----------------------------
     # Index setup
     # -----------------------------
@@ -500,6 +531,7 @@ class Retrieval:
         filter_types = {
             "int": models.PayloadSchemaType.INTEGER,
             "str": models.PayloadSchemaType.KEYWORD,
+            "float": models.PayloadSchemaType.FLOAT,
         }
         fields: dict[str, set[tuple[str, models.PayloadSchemaType]]] = {
             "quran": {("ids", models.PayloadSchemaType.KEYWORD)},
@@ -523,7 +555,7 @@ class Retrieval:
 
         filter_schema = {
             "quran": {"surah_number": "int", "surah": "str"},
-            "hadith": {"book": "str", "grade": "str"},
+            "hadith": {"book": "str", "grade": "str", "hadith_number": "float"},
             "tafsir": {"surah_number": "int", "surah": "str", "ayah_number": "int"},
             "books": {
                 "book_id": "int",

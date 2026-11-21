@@ -79,7 +79,7 @@ def get_quran(req: QuranId):
 
 def get_hadith(req: HadithId):
     "Get a specific hadith"
-    return retrieval.by_id("hadith", f"{req.book}:{req.hadith_number}")
+    return retrieval.by_hadith(req.book, req.hadith_number)
 
 
 def get_tafsir(req: TafsirId):
