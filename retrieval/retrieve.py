@@ -28,6 +28,25 @@ load_dotenv()
 CollectionName = Literal["quran", "hadith", "tafsir", "books", "sunnah"]
 RetrievalMode = Literal["hybrid", "dense", "sparse"]
 
+# Jev (TypeSafe System One) reranker. English instructions, Arabic state: that is
+# TypeSafe's guidance for non-English content, and their own reranking recipe is
+# one Noul per query-candidate pair.
+JEV_URL = "https://opencode.ai/inference/systemone/v1/systemone"
+JEV_MODEL = "jev-1.13-free"
+JEV_CONCURRENCY = 8
+# ponytail: one pair per request, no batching (state is shared by every question in
+# a request), so a chunk longer than this is judged on its head. Upgrade path: raise
+# it and pay the tokens, or split the chunk and take the max noul.
+JEV_PASSAGE_CHARS = 1200
+JEV_QUESTION = {
+    "type": "noul",
+    "instructions": "Does the passage contain information that answers the question?",
+    "criteria": {
+        "true": "The passage states, or directly supports, what the question asks.",
+        "false": "The passage shares the topic but does not answer the question.",
+    },
+}
+
 
 class Retrieval:
     def __init__(
@@ -41,6 +60,12 @@ class Retrieval:
         # (422 "batch size N > maximum allowed batch size"), 32 on the deployed
         # reranker. Upgrade path: read /info once at startup instead of hardcoding.
         rerank_batch_size: int = 32,
+        # None reads the env var; "" disables Jev explicitly (tests rely on that,
+        # since load_dotenv() would otherwise hand them the operator's real key).
+        jev_url: str | None = None,
+        jev_api_key: str | None = None,
+        jev_model: str | None = None,
+        jev_pool: int = 24,
     ) -> None:
         self.url = url or os.environ.get("QDRANT_URL", "http://localhost:6333")
         self.api_key = api_key or os.environ.get("QDRANT_API_KEY")
@@ -51,6 +76,18 @@ class Retrieval:
             "RERANKER_URL", "http://reranker:80"
         )
         self.rerank_batch_size = rerank_batch_size
+        self.jev_url = (
+            jev_url if jev_url is not None else os.environ.get("JEV_API_URL", JEV_URL)
+        )
+        self.jev_api_key = (
+            jev_api_key if jev_api_key is not None else os.environ.get("JEV_API_KEY")
+        )
+        self.jev_model = (
+            jev_model
+            if jev_model is not None
+            else os.environ.get("JEV_MODEL", JEV_MODEL)
+        )
+        self.jev_pool = jev_pool
 
     # -----------------------------
     # Lazily created dependencies
@@ -71,6 +108,28 @@ class Retrieval:
     @cached_property
     def reranker_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self.reranker_url, timeout=60.0)
+
+    @property
+    def jev_enabled(self) -> bool:
+        """A key is the switch; JEV_RERANK=off is the kill switch back to TEI."""
+        return (
+            bool(self.jev_api_key)
+            and os.environ.get("JEV_RERANK", "on").strip().lower() != "off"
+        )
+
+    @cached_property
+    def jev_client(self) -> httpx.AsyncClient:
+        # No base_url: the endpoint arrives as one absolute URL and an empty
+        # relative path would leave httpx guessing how to join them.
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(12.0, connect=5.0),
+            headers={
+                "Authorization": f"Bearer {self.jev_api_key}",
+                # Cloudflare in front of the endpoint answers a generic SDK or
+                # library user agent with 403 "error code: 1010".
+                "User-Agent": "elimam-backend/0.1",
+            },
+        )
 
     # -----------------------------
     # Vectors and filters
@@ -155,6 +214,22 @@ class Retrieval:
     # -----------------------------
     # Reranking
     # -----------------------------
+
+    async def _jev_score(self, query_text: str, text: str) -> float:
+        """One System One Noul for one (query, passage) pair; 0..1."""
+        response = await self.jev_client.post(
+            self.jev_url,
+            json={
+                "model": self.jev_model,
+                "state": {
+                    "query": query_text,
+                    "passage": self.preprocess(text)[:JEV_PASSAGE_CHARS],
+                },
+                "questions": {"answers_question": JEV_QUESTION},
+            },
+        )
+        response.raise_for_status()
+        return float(response.json()["answers"]["answers_question"]["noul"])
 
     async def _rerank_batch(self, query_text: str, batch: list[str]) -> list[dict]:
         """One TEI /rerank call; returns [{"index": i, "score": s}, ...]."""
