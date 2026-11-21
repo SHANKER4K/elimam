@@ -66,9 +66,9 @@ else:
     ), "no OTLP exporter while OTEL_EXPORTER_OTLP_ENDPOINT is set (Opik export dead)"
 
 instrumentation = pydantic_ai.Agent._instrument_default
-assert instrumentation is not True and instrumentation.include_content is False, (
-    "pydantic-ai instrumentation must mask prompt/answer content"
+assert instrumentation is not True and instrumentation.include_content is True, (
+    "pydantic-ai instrumentation must capture prompt/answer content (user decision on #19)"
 )
 
 mode = "off (envs unset)" if "--off" in sys.argv else "on (envs set)"
-print(f"test_logfire_config OK [{mode}]: pipeline gates correct, content masked, server boots")
+print(f"test_logfire_config OK [{mode}]: pipeline gates correct, content captured, server boots")

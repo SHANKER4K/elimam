@@ -113,11 +113,13 @@ logfire.configure(
     if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     else [],
 )
-# Redaction (the issue's non-negotiable): include_content=False keeps prompts,
-# answers and tool arguments out of every trace destination - users' religious
-# Q&A never leaves the server. Provider keys are safe regardless:
-# instrument_httpx does not capture headers, and api/keys.py never logs keys.
-logfire.instrument_pydantic_ai(include_content=False)
+# Content capture is deliberate (user decision on issue #19): prompts, answers
+# and tool call arguments/results ARE shipped to the trace destinations - that
+# is the debugging value of Logfire for an LLM app. Secrets are still safe:
+# instrument_httpx does not capture headers (provider keys ride them), and
+# api/keys.py never logs keys. Never set LOGFIRE_HTTPX_CAPTURE_ALL or
+# OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_* - those would ship the headers.
+logfire.instrument_pydantic_ai(include_content=True)
 # Every provider request in _build_agent rides httpx - this gives per-request
 # latency + token-usage spans for OpenAI/Anthropic/Groq/Mistral/DeepSeek/...
 logfire.instrument_httpx()
