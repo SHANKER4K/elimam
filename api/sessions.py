@@ -2,14 +2,14 @@ import json
 import logging
 
 import psycopg2
-from pydantic_core.core_schema import float_schema
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from api.db_errors import db_error
 from db.connection import get_conn
 from identity import can_access, current_user_id, require_owner
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
-logger = logging.getLogger("api.providers")
+logger = logging.getLogger("api.sessions")
 
 
 class SessionCreate(BaseModel):
@@ -62,14 +62,16 @@ def get_session(session_id: str):
                 )
                 row = cur.fetchone()
     except psycopg2.Error as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise db_error(e) from e
     try:
         session = _row_to_session(row)
-    except Exception as e:
-        print("=" * 20, flush=True)
-        print(row, flush=True)
-        print("=" * 20, flush=True)
-        raise f"{e}, Here is the problem ,{row}"
+    except Exception as exc:
+        # The row itself is not logged: it carries the whole conversation.
+        logger.exception(
+            "session_row_unreadable",
+            extra={"session_id": session_id, "row_width": len(row) if row else None},
+        )
+        raise HTTPException(status_code=500, detail="Could not read session") from exc
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -97,7 +99,7 @@ async def get_active_session(user_id: str, request: Request):
                 )
                 row = cur.fetchone()
     except psycopg2.Error as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise db_error(e) from e
     session = _row_to_session(row)
     if session is None:
         raise HTTPException(status_code=404, detail="No active session")
@@ -134,8 +136,8 @@ def add_session(req: SessionCreate, request: Request):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Database error: {e}")
-    return (_row_to_session(row),)
+            raise db_error(e) from e
+    return _row_to_session(row)
 
 
 def create_web_session(session_id: str, req: SessionCreate) -> None:
@@ -167,7 +169,7 @@ def create_web_session(session_id: str, req: SessionCreate) -> None:
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+            raise db_error(e) from e
 
 
 @router.put("/{session_id}/model")
@@ -202,7 +204,7 @@ def update_session_model(session_id: str, req: SessionModelUpdate, request: Requ
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+            raise db_error(e) from e
     if row is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return {
@@ -256,7 +258,7 @@ def reset_session(user_id: str) -> dict:
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+            raise db_error(e) from e
     return _row_to_session(new_row)
 
 

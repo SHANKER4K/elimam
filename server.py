@@ -1,6 +1,6 @@
 """
 FastAPI server for the Islamic scholar agent.
-Run: uvicorn backend.server:app --reload
+Run: uvicorn server:app --reload
 """
 
 import contextvars
@@ -127,36 +127,9 @@ logfire.instrument_httpx()
 logfire.instrument_fastapi(app)
 
 
-@app.middleware("http")
-async def request_logging(request: Request, call_next):
-    """One JSON line per HTTP request, correlated by request_id. Accepts an
-    inbound X-Request-ID (set by a reverse proxy) or mints one."""
-    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
-    token = REQUEST_ID_CONTEXT.set(request_id)
-    start = time.perf_counter()
-    try:
-        response = await call_next(request)
-    except Exception:
-        # Re-raise so the global handler below also sees it (and logs it once).
-        raise
-    finally:
-        # Only log on the happy path here; exceptions log themselves with context.
-        if "response" in locals():
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            logger.info(
-                "request",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status": getattr(response, "status_code", 0),
-                    "duration_ms": duration_ms,
-                },
-            )
-        REQUEST_ID_CONTEXT.reset(token)
-    response.headers["X-Request-ID"] = request_id
-    return response
-
-
+# Registration order matters: Starlette wraps the most recently added
+# middleware outermost. identity is registered first so request_logging wraps
+# it, and its 401s are logged and carry an X-Request-ID like any response.
 @app.middleware("http")
 async def identity_middleware(request: Request, call_next):
     """The one gate for every non-public route. Identity comes from the signed
@@ -192,6 +165,36 @@ async def identity_middleware(request: Request, call_next):
     request.state.identity = identity
     request.state.user_id = identity.user_id
     return await call_next(request)
+
+
+@app.middleware("http")
+async def request_logging(request: Request, call_next):
+    """One JSON line per HTTP request, correlated by request_id. Accepts an
+    inbound X-Request-ID (set by a reverse proxy) or mints one."""
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    token = REQUEST_ID_CONTEXT.set(request_id)
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Re-raise so the global handler below also sees it (and logs it once).
+        raise
+    finally:
+        # Only log on the happy path here; exceptions log themselves with context.
+        if "response" in locals():
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            logger.info(
+                "request",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": getattr(response, "status_code", 0),
+                    "duration_ms": duration_ms,
+                },
+            )
+        REQUEST_ID_CONTEXT.reset(token)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 # Added last on purpose: Starlette wraps the most recently added middleware

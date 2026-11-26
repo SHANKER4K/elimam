@@ -24,7 +24,7 @@ So unit tests that avoid importing these modules fail fast; anything touching th
 
 - `docker compose up` = backend (`:8000`) + telegram bot + nginx + omniroute. Qdrant and Postgres are **external**: `QDRANT_URL` and the `DATABASE_*` vars come from `.env`. Needs `.env` secrets (`TELEGRAM_BOT_TOKEN`, `BOT_SHARED_SECRET`, `ENCRYPTION_MASTER_KEY`).
 - DB migrations are applied from the frontend (`cd ../frontend && bun run db:generate && bun run db:migrate`); this service never runs DDL. `db/` contains exactly one file, `connection.py` (the psycopg2 pool) — do not add Drizzle artifacts here.
-- Tests: `tests/` needs no Qdrant, TEI or models (`test_retrieval`, `test_citations`, `test_books_fuzzy`, `test_tool_presenter`, `test_seed_text`, `test_providers_config` are all standalone). Anything that actually calls `retrieval.retrieve(...)` needs `docker compose up` and a populated Qdrant. `tests/test_dahl_*.py` are ad-hoc debug scripts, not pytest tests.
+- Tests: `tests/` needs no Qdrant, TEI or models. Standalone (no services at all): `test_retrieval`, `test_citations`, `test_books_fuzzy`, `test_tool_presenter`, `test_seed_text`, `test_agui_events`, `test_agui_route`, `test_providers_config`. `tests/test_chat_*.py` and `test_session_rows.py` need a Postgres with the frontend's schema: they drive the real `api.chat.stream()` with pydantic-ai's `TestModel`/`FunctionModel` and a local fake LLM server (`tests/fake_llm_server.py`); `tests/chat_harness.py` stubs the Qdrant index setup before importing `api.chat`. `scripts/check_logfire_config.py` is a runnable check for the Logfire wiring. Anything that actually calls `retrieval.retrieve(...)` needs `docker compose up` and a populated Qdrant. `tests/test_dahl_*.py` are ad-hoc debug scripts, not pytest tests.
 
 ## Dependency manifests have drifted
 
@@ -43,4 +43,4 @@ Two root manifests disagree: `pyproject.toml` (uv, `uv.lock`, requires-python >=
 
 ## Legacy — don't extend
 
-`cli/` (old chromadb stack), `web.py` (references a missing `retrieve_function`, contains a hardcoded API key), and `get_books.py`/`get_headers.py` (JPype/shameladb ingestion) are not part of the active stack.
+`cli/` (old chromadb stack) and `get_books.py`/`get_headers.py` (JPype/shameladb ingestion) are not part of the active stack.

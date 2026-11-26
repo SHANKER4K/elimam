@@ -489,7 +489,14 @@ class Retrieval:
             ),
             with_vectors=False,
         )
-        return points[0].payload if points else []
+        if not points:
+            return self.not_found(collection, key)
+        return points[0].payload
+
+    @staticmethod
+    def not_found(collection: str, key: str) -> dict:
+        """What a lookup miss looks like to the LLM: always a dict, like a hit."""
+        return {"error": "not_found", "collection": collection, "id": key}
 
     def by_hadith(self, book: str, hadith_number: float):
         """Fetch a hadith by book + number.
@@ -515,7 +522,7 @@ class Retrieval:
             with_vectors=False,
         )
         if not points:
-            return []
+            return self.not_found("hadith", f"{book}:{float(hadith_number)}")
         payload = dict(points[0].payload)
         # Same id convention the citation registry will use (issue #7):
         # hadith -> "book:number", number kept as the stored float.

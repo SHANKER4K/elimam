@@ -38,7 +38,7 @@ flowchart TB
 
   subgraph legacy["Not in compose"]
     MCP["server_mcp.py (FastMCP)"]
-    CLI["cli/, web.py, get_books.py"]
+    CLI["cli/, get_books.py"]
   end
 
   TGU --> AGR --> BE
