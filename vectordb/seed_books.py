@@ -59,7 +59,8 @@ def book_meta(row) -> dict:
         "book_name": row.book_name,
         "book_date": row.book_date,
         "category_name": row.category_name,
-        "all_authors": row.all_authors,
+        # Same field name as the live collection and the `authors` filter.
+        "authors": row.all_authors,
         "headers": headers_tree,
         "chunk_page": row.chunk_page,
         "author_death": row.main_author_death,
@@ -153,6 +154,10 @@ def main():
         
         payload = book_meta(row)
         payload["ids"] = doc_id
+        # Split out of ids too, so book_id/chunk_index filters and get_book work
+        # (vectordb/backfill_book_ids.py adds the same fields to old points).
+        payload["category_id"] = int(row.book_category)
+        payload["chunk_index"] = int(row.chunk_num)
         payload["text"] = docs[i]
 
         point = PointStruct(
