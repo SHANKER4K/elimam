@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import aclosing
 import logging
 import os
 import time
@@ -521,7 +522,10 @@ async def stream(
     _active_turns.add(session_id)
     outcome: dict[str, Any] = {"output": None}
     try:
-        async for chunk in _run_turn(
+        # aclosing: when the client disconnects, Starlette aclose()s this
+        # generator; the inner run must be closed right here (persisting the
+        # partial turn) rather than whenever the GC finalises it.
+        turn = _run_turn(
             outcome,
             prompt,
             session_id=session_id,
@@ -532,8 +536,10 @@ async def stream(
             variant=variant,
             api_style=api_style,
             extra_headers=extra_headers,
-        ):
-            yield chunk
+        )
+        async with aclosing(turn):
+            async for chunk in turn:
+                yield chunk
     except asyncio.CancelledError:
         logger.info("agent_run_cancelled", extra={"session_id": session_id})
         raise

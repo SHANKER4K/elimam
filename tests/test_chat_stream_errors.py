@@ -139,3 +139,32 @@ def _rows(session_id):
                 (session_id,),
             )
             return cur.fetchall()
+
+
+def test_client_disconnect_closes_the_turn_promptly(monkeypatch):
+    """Starlette aclose()s the generator when the client goes away; the inner
+    run must be closed right then (not whenever GC gets to it), so the partial
+    turn is persisted and the busy guard released before aclose() returns."""
+
+    async def stream_fn(messages, info):
+        yield "partial "
+        await asyncio.sleep(30)
+        yield "never"
+
+    _use(monkeypatch, lambda: Agent(FunctionModel(stream_function=stream_fn)))
+    session_id = make_session()
+
+    async def disconnect_after_first_delta():
+        gen = chat.stream(
+            "q", session_id=session_id, provider_slug="openai", provider_url="",
+            api_key="k", model_name="m", variant="none",
+        )
+        async for chunk in gen:
+            if "text_delta" in chunk or "message_start" in chunk:
+                break
+        await gen.aclose()
+        return session_id in chat._active_turns, chat.load_session(session_id)
+
+    still_busy, history = asyncio.run(disconnect_after_first_delta())
+    assert not still_busy
+    assert history and history[0].parts[-1].content == "q"
