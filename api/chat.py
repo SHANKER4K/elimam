@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, get_args
 import uuid
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -25,6 +25,7 @@ from pydantic_ai import (
     PartEndEvent,
 )
 from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.settings import ThinkingEffort, ThinkingLevel
 from pydantic_ai.messages import (
     ModelResponse,
     UserPromptPart,
@@ -34,15 +35,15 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
 )
 from pydantic_ai.capabilities.hooks import Hooks
-from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
-from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.google import GoogleProvider
 
-from pydantic_ai.models.groq import GroqModel, GroqModelSettings
+from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.providers.groq import GroqProvider
 
 from pydantic_ai.models.xai import XaiModel
@@ -165,38 +166,43 @@ tools = FunctionToolset(
 )
 
 
-def _build_settings(
-    provider_key: str, variant: str | None, flex: bool
-) -> ModelSettings | None:
-    """Map a generic 'variant' (reasoning effort) + 'flex' (cheap/slow tier)
-    onto each provider's own settings dialect."""
-    kwargs: dict[str, Any] = {}
+_THINKING_EFFORTS = set(get_args(ThinkingEffort))
+_THINKING_OFF = {"none", "off", "false"}
 
-    if provider_key in ("openai", "deepseek"):  # OpenAI-compatible chat API
-        if flex:
-            kwargs["openai_service_tier"] = "flex"
-        if variant:
-            kwargs["openai_reasoning_effort"] = variant
-        return OpenAIChatModelSettings(**kwargs) if kwargs else None
 
-    if provider_key == "anthropic":
-        if variant:
-            # Anthropic uses extended thinking instead of a simple effort enum
-            kwargs["anthropic_thinking"] = {"type": "enabled", "budget_tokens": 4096}
-        return AnthropicModelSettings(**kwargs) if kwargs else None
+def _thinking_level(variant: str | None) -> ThinkingLevel | None:
+    """A stored variant -> pydantic-ai's unified `thinking` value.
 
-    if provider_key == "groq":
-        if variant:
-            kwargs["groq_reasoning_format"] = "parsed"
-        return GroqModelSettings(**kwargs) if kwargs else None
+    None means "send nothing, keep the model's default". Catalog variants
+    already use the unified vocabulary (low/high/max...); any other label
+    means "thinking on at the provider's default effort".
+    """
+    if not variant:
+        return None
+    v = variant.strip().lower()
+    if v in _THINKING_OFF:
+        return False
+    if v in _THINKING_EFFORTS:
+        return v  # type: ignore[return-value]
+    return True
 
-    if provider_key == "google":
-        if variant:
-            kwargs["google_thinking_config"] = {"include_thoughts": True}
-        return GoogleModelSettings(**kwargs) if kwargs else None
 
-    # openrouter / mistral: fall back to generic ModelSettings only
-    return None
+def _build_settings(variant: str | None, **extra: Any) -> ModelSettings | None:
+    """Model settings for a variant, via the unified `thinking` setting.
+
+    Each adapter translates `thinking` for its model: adaptive vs budget
+    thinking on Anthropic, `reasoning_effort` on OpenAI, `thinking_config` on
+    Google, and so on. Models whose profile has no thinking support ignore it.
+    """
+    settings = ModelSettings(**extra)
+    level = _thinking_level(variant)
+    if level is not None:
+        settings["thinking"] = level
+    return settings or None
+
+
+def _headers(headers: dict[str, str] | None) -> dict[str, Any]:
+    return {"extra_headers": headers} if headers else {}
 
 
 def _build_agent(
@@ -233,7 +239,7 @@ def _build_agent(
     }
     if provider_slug in builders:
         model = builders[provider_slug]()
-        model_settings = _build_settings(provider_slug, variant, True)
+        model_settings = _build_settings(variant)
     elif provider_slug == "free":
         # The "free" provider is a special case: it doesn't require an API key,
         # and the user must select a model from the available options.
@@ -242,29 +248,22 @@ def _build_agent(
             api_key=os.environ.get("FREE_PROVIDER_API_KEY"),
         )
         model = OpenAIChatModel(model_name, provider=provider)
-        model_settings = OpenAIChatModelSettings(
+        model_settings = _build_settings(
+            variant,
             temperature=0.5,
-            extra_headers=opencode_session_headers(
-                os.environ.get("FREE_PROVIDER_URL"), session_id
-            )
-            or None,
+            **_headers(opencode_session_headers(os.environ.get("FREE_PROVIDER_URL"), session_id)),
         )
     else:
         # Default to OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Mistral, etc.)
         provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
         model = OpenAIChatModel(model_name, provider=provider)
 
-        settings_kwargs = {"temperature": 0.5}
         # OpenCode Zen/Go refuse to route a request with no session id.
-        session_headers = opencode_session_headers(provider_url, session_id)
-        if session_headers:
-            settings_kwargs["extra_headers"] = session_headers
-        if provider_slug == "openai":
-            settings_kwargs["openai_service_tier"] = "flex"
-            if variant:
-                settings_kwargs["openai_reasoning_effort"] = variant
-
-        model_settings = OpenAIChatModelSettings(**settings_kwargs)
+        model_settings = _build_settings(
+            variant,
+            temperature=0.5,
+            **_headers(opencode_session_headers(provider_url, session_id)),
+        )
 
     return Agent(
         model,
