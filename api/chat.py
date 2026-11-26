@@ -26,6 +26,7 @@ from pydantic_ai import (
 )
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
+    ModelResponse,
     UserPromptPart,
     TextPart,
     TextPartDelta,
@@ -300,12 +301,27 @@ def save_session_messages(session_id: str, msgs) -> None:
         conn.commit()
 
 
-def _project_message(m) -> tuple[str, str | None]:
-    kind = type(m).__name__
-    role = "assistant" if kind == "ModelResponse" else "user"
-    text = "".join(
-        p.content for p in m.parts if isinstance(p, (TextPart, UserPromptPart))
-    )
+def _project_message(m) -> tuple[str, str] | None:
+    """The chat-log row for one pydantic-ai message, or None if it has none.
+
+    Only the user's own prompt and the model's visible answer are logged:
+    tool returns, system prompts, tool calls and thinking stay in
+    `sessions.pydantic_message`. Multimodal prompts keep their text items only.
+    """
+    if isinstance(m, ModelResponse):
+        role = "assistant"
+        texts = [p.content for p in m.parts if isinstance(p, TextPart)]
+    else:
+        role = "user"
+        texts = []
+        for p in m.parts:
+            if not isinstance(p, UserPromptPart):
+                continue
+            items = [p.content] if isinstance(p.content, str) else p.content
+            texts.extend(item for item in items if isinstance(item, str))
+    text = "".join(texts)
+    if not text:
+        return None
 
     # Persist the canonical citation tags, so cards re-render after a reload
     # without persisting tool results. Guarded by "<" to avoid Qdrant lookups
@@ -313,30 +329,28 @@ def _project_message(m) -> tuple[str, str | None]:
     if role == "assistant" and "<" in text:
         text = render_citations(text)
 
-    return role, text or None
+    return role, text
 
 
 def append_session_messages(session_id: str, msgs) -> None:
-    if not msgs:
+    rows = [row for row in map(_project_message, msgs) if row is not None]
+    if not rows:
         return
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # ponytail: atomic sequence — subquery inside INSERT computes
-            # MAX(sequence)+offset in the same tx, eliminating the fetch-then-insert
-            # race. O(n) one-at-a-time inserts; bulk INSERT if throughput matters.
-            for i, m in enumerate(msgs):
-                role, content = _project_message(m)
+            # Each INSERT's subquery sees the rows inserted before it in this
+            # transaction, so +1 is the next free sequence every time.
+            for role, content in rows:
                 cur.execute(
                     """
                     INSERT INTO messages (session_id, role, content, sequence)
                     VALUES (
-                        %s, %s,
-                        %s,
-                        (SELECT COALESCE(MAX(sequence), 0) + %s
+                        %s, %s, %s,
+                        (SELECT COALESCE(MAX(sequence), 0) + 1
                          FROM messages WHERE session_id = %s)
                     )
                     """,
-                    (session_id, role, content, i + 1, session_id),
+                    (session_id, role, content, session_id),
                 )
         conn.commit()
 
@@ -541,16 +555,19 @@ async def stream(
                 logger.debug("Stream completed normally")
                 pass
             finally:
-                # احفظ الـ messages بس إذا الـ agent_run لسه موجود
+                # Persist whatever the run produced, even if it stopped early:
+                # the full history for the next turn, and only this turn's
+                # messages for the chat log (all_messages() includes the
+                # history we passed in, so appending it duplicated every turn).
                 try:
                     await asyncio.to_thread(
                         save_session_messages, session_id, agent_run.all_messages()
                     )
                     await asyncio.to_thread(
-                        append_session_messages, session_id, agent_run.all_messages()
+                        append_session_messages, session_id, agent_run.new_messages()
                     )
-                except Exception as e:
-                    logger.error(f"Failed to save session: {e}")
+                except Exception:
+                    logger.exception("session_save_failed", extra={"session_id": session_id})
 
     except ModelHTTPError as e:
         message = e.body.get("message") if isinstance(e.body, dict) else str(e)
