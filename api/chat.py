@@ -201,8 +201,20 @@ def _build_settings(variant: str | None, **extra: Any) -> ModelSettings | None:
     return settings or None
 
 
-def _headers(headers: dict[str, str] | None) -> dict[str, Any]:
-    return {"extra_headers": headers} if headers else {}
+def _headers(*layers: dict[str, str] | None) -> dict[str, Any]:
+    """`extra_headers=` kwargs merging the given header dicts (later wins)."""
+    merged: dict[str, str] = {}
+    for layer in layers:
+        merged.update(layer or {})
+    return {"extra_headers": merged} if merged else {}
+
+
+def _anthropic_base_url(url: str) -> str:
+    """Connections store the URL their `/models` lives under (`.../v1`, like
+    the catalog's https://api.anthropic.com/v1), but the Anthropic SDK appends
+    `/v1/messages` itself."""
+    url = url.rstrip("/")
+    return url[: -len("/v1")] if url.endswith("/v1") else url
 
 
 def _build_agent(
@@ -212,6 +224,8 @@ def _build_agent(
     api_key: str | None,
     variant: str,
     session_id: str | None = None,
+    api_style: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> Agent:
     """Build a PydanticAI Agent for OpenAI, Anthropic, OpenRouter, DeepSeek, or other compatible providers."""
 
@@ -239,7 +253,7 @@ def _build_agent(
     }
     if provider_slug in builders:
         model = builders[provider_slug]()
-        model_settings = _build_settings(variant)
+        model_settings = _build_settings(variant, **_headers(extra_headers))
     elif provider_slug == "free":
         # The "free" provider is a special case: it doesn't require an API key,
         # and the user must select a model from the available options.
@@ -254,15 +268,24 @@ def _build_agent(
             **_headers(opencode_session_headers(os.environ.get("FREE_PROVIDER_URL"), session_id)),
         )
     else:
-        # Default to OpenAI-compatible provider (OpenAI, OpenRouter, Groq, Mistral, etc.)
-        provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
-        model = OpenAIChatModel(model_name, provider=provider)
+        # Custom connections and catalog providers without a dedicated
+        # adapter: the connection's api_style says which wire protocol it speaks.
+        if api_style == "anthropic_compatible":
+            model = AnthropicModel(
+                model_name,
+                provider=AnthropicProvider(
+                    api_key=api_key, base_url=_anthropic_base_url(provider_url)
+                ),
+            )
+        else:
+            provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
+            model = OpenAIChatModel(model_name, provider=provider)
 
         # OpenCode Zen/Go refuse to route a request with no session id.
         model_settings = _build_settings(
             variant,
             temperature=0.5,
-            **_headers(opencode_session_headers(provider_url, session_id)),
+            **_headers(extra_headers, opencode_session_headers(provider_url, session_id)),
         )
 
     return Agent(
@@ -411,6 +434,8 @@ async def stream(
     api_key: str | None,
     model_name: str,
     variant: str,
+    api_style: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ):
     agent = _build_agent(
         provider_slug=provider_slug,
@@ -419,6 +444,8 @@ async def stream(
         api_key=api_key,
         variant=variant,
         session_id=session_id,
+        api_style=api_style,
+        extra_headers=extra_headers,
     )
 
     history = await asyncio.to_thread(load_session, session_id)
@@ -658,6 +685,8 @@ def chat_stream(
             api_key=model_config["api_key"],
             model_name=model_config["model"],
             variant=model_config["variant"],
+            api_style=model_config["api_style"],
+            extra_headers=model_config["extra_headers"],
         ),
         media_type="text/event-stream",
     )
@@ -730,6 +759,8 @@ async def chat_web_stream(req: WebChatRequest, request: Request):
             api_key=model_config["api_key"],
             model_name=model_config["model"],
             variant=model_config["variant"],
+            api_style=model_config["api_style"],
+            extra_headers=model_config["extra_headers"],
         ),
         media_type="text/event-stream",
     )
