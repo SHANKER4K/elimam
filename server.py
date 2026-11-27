@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from api.chat import router as chat_router
+from api.agui import router as agui_router
 from api.sessions import router as sessions_router
 from api.users import router as users_router
 from api.messages import router as messages_router
@@ -220,6 +221,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(chat_router)
+app.include_router(agui_router)
 app.include_router(sessions_router)
 app.include_router(users_router)
 app.include_router(messages_router)

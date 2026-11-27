@@ -10,6 +10,7 @@ dependencies = [
   "telegramify-markdown",
   "pydantic",
   "pydantic-ai",
+  "pydantic-ai-slim[ag-ui]",
   "pydantic-harness",
   "fastapi",
   "logfire[httpx]",

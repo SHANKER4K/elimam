@@ -60,6 +60,7 @@ PUBLIC_PATHS = frozenset(
 
 PROTECTED_PREFIXES = (
     "/chat/web",
+    "/chat/agui",
     "/chat/dense_search",
     "/chat/sparse_search",
     "/chat/hybrid_search",
