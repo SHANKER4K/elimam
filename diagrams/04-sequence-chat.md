@@ -12,7 +12,7 @@ sequenceDiagram
   participant P as providers.resolve_model_config
   participant S as sessions (Postgres)
   participant A as pydantic-ai Agent
-  participant T as search.py tools
+  participant T as retrieval tools
   participant Q as Qdrant
   participant L as LLM provider
 

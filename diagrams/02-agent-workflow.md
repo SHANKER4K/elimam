@@ -31,7 +31,7 @@ flowchart TD
   N --> P{"tool name"}
   P -->|"dense / sparse / hybrid_search"| Q["Qdrant retrieval + cross-encoder rerank<br/>see 06-retrieval-pipeline.md"]
   P -->|"get_quran / get_hadith / get_tafsir / get_sunnah"| R["Qdrant scroll by payload ids"]
-  P -->|"get_books_*"| S["static book/category lists in search.py"]
+  P -->|"get_books_*"| S["static book/category lists in retrieval/books.py"]
   Q --> L
   R --> L
   S --> L
@@ -56,6 +56,6 @@ flowchart TD
 
 Notes:
 
-- Tools are a `FunctionToolset` of 11 functions, all from `search.py`; the system prompt is `skills/turath-index-skill.md` (read at import, relative path).
+- Tools are a `FunctionToolset` of 11 functions, all from `retrieval`; the system prompt is `skills/turath-index-skill.md` (read at import, relative path).
 - Two persistence targets per turn: `sessions.pydantic_message` (full pydantic-ai history, the resumption source) and `messages` rows (projected role/content, sequence computed in the INSERT subquery).
-- `retries=3` on the Agent; tool errors are returned to the model as `ToolReturnPart`s (`search.py` catches `Exception` and returns `[{"error": ...}]`).
+- `retries=3` on the Agent; tool errors are returned to the model as `ToolReturnPart`s (`tools.py` catches `Exception` and returns `[{"error": ...}]`).

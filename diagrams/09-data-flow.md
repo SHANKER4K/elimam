@@ -12,7 +12,7 @@ flowchart LR
   P1["1.0 Authenticate<br/>identity.py"]
   P2["2.0 Resolve model config<br/>api/providers.py"]
   P3["3.0 Run agent turn<br/>api/chat.py"]
-  P4["4.0 Retrieve<br/>search.py"]
+  P4["4.0 Retrieve<br/>retrieval/"]
   P5["5.0 Provider discovery<br/>api/me_providers.py"]
   P6["6.0 Persist<br/>api/chat.py, api/sessions.py"]
 
