@@ -7,6 +7,13 @@
 """
 
 from .books import BOOKS_LIST, CATEGORIES_NAMES, SUNNAH_BOOKS
+from .citations import (
+    CitationRenderer,
+    CitationStream,
+    plain_text,
+    render_citations,
+    render_plain,
+)
 from .retrieve import CollectionName, Retrieval, RetrievalMode, retrieval
 from .schemas import (
     BooksFilters,
@@ -28,10 +35,13 @@ from .schemas import (
     TafsirSearchRequest,
 )
 from .tools import (
+    find_book,
+    find_category,
     get_book,
     get_books_books,
     get_books_categories,
     get_books_sunnah,
+    get_chunk,
     get_hadith,
     get_quran,
     get_sunnah,

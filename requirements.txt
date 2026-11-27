@@ -1,4 +1,5 @@
 pyarabic
+rapidfuzz
 qdrant_client
 pydantic
 pydantic-ai

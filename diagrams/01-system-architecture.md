@@ -19,7 +19,7 @@ flowchart TB
     SRV["server.py<br/>request-id + identity middleware, routers"]
     RW["api routers<br/>chat, sessions, users, messages, keys, providers, me_providers, search"]
     IDN["identity.py<br/>HMAC user sig / bot secret"]
-    SRCH["search.py<br/>dense + sparse + RRF + rerank"]
+    SRCH["retrieval/<br/>dense + sparse + RRF + rerank"]
   end
 
   subgraph bot["Telegram service (aiogram, image elimam_bot:latest)"]
@@ -36,7 +36,7 @@ flowchart TB
     OPIK["Opik via logfire OTLP"]
   end
 
-  subgraph legacy["Legacy, not in compose"]
+  subgraph legacy["Not in compose"]
     MCP["server_mcp.py (FastMCP)"]
     CLI["cli/, web.py, get_books.py"]
   end
@@ -63,7 +63,7 @@ flowchart TB
 
 Key points:
 
-- There is exactly one search layer (`search.py`) and one identity layer (`identity.py`).
+- There is exactly one search layer (`retrieval/`) and one identity layer (`identity.py`).
 - The bot is transport only: it never opens the DB or Qdrant, only `BackendClient` HTTP.
 - Backend publishes no host port; nginx and the Next.js proxy are the only entries.
 - Postgres and Qdrant are external to compose (`.env`: `DATABASE_*`, `QDRANT_URL`).
