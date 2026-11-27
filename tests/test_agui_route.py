@@ -30,6 +30,8 @@ CONFIG = {
     "api_key": "k",
     "requires_key": True,
     "user_provider_id": "up-1",
+    "api_style": "anthropic_compatible",
+    "extra_headers": {"X-Org": "acme"},
 }
 PROPS = {"model_provider": "openai", "model_name": "m", "model_variant": "low"}
 
@@ -76,14 +78,22 @@ def route(monkeypatch):
         sys.modules.pop(name, None)
     agui = importlib.import_module("api.agui")
 
-    calls = {"created": [], "saved": [], "appended": []}
+    agui._active_turns.clear()
+    calls = {"created": [], "persisted": [], "built": []}
     monkeypatch.setattr(agui, "get_session", lambda sid: pytest.fail("set per test"))
     monkeypatch.setattr(agui, "resolve_model_config", lambda *a: dict(CONFIG))
     monkeypatch.setattr(agui, "create_web_session", lambda sid, req: calls["created"].append((sid, req)))
-    monkeypatch.setattr(agui, "load_session", lambda sid: list(PRIOR))
-    monkeypatch.setattr(agui, "save_session_messages", lambda sid, msgs: calls["saved"].append(list(msgs)))
-    monkeypatch.setattr(agui, "append_session_messages", lambda sid, msgs: calls["appended"].append(list(msgs)))
-    monkeypatch.setattr(agui, "_build_agent", lambda **kw: Agent(FunctionModel(stream_function=answer)))
+    monkeypatch.setattr(agui, "load_session_state", lambda sid: (list(PRIOR), "digest-1"))
+
+    def persist(sid, all_msgs, new_msgs, digest):
+        calls["persisted"].append((list(all_msgs), list(new_msgs), digest))
+
+    def build(**kwargs):
+        calls["built"].append(kwargs)
+        return Agent(FunctionModel(stream_function=answer))
+
+    monkeypatch.setattr(agui, "persist_turn", persist)
+    monkeypatch.setattr(agui, "_build_agent", build)
 
     app = FastAPI()
 
@@ -94,6 +104,7 @@ def route(monkeypatch):
 
     app.include_router(agui.router)
     yield agui, TestClient(app), calls
+    agui._active_turns.clear()
 
     for name, original in originals.items():
         attr = name.split(".", 1)[1]
@@ -133,9 +144,12 @@ def test_a_new_thread_creates_its_session_streams_and_saves_only_the_new_turn(ro
     assert sid == THREAD and created.user_id == ME and created.source == "web"
     assert created.user_provider_id == "up-1", "the session is pinned to the connection that answered"
 
-    # The stored blob is the whole conversation; the log gets this turn only.
-    assert len(calls["saved"][0]) == len(PRIOR) + 2
-    assert len(calls["appended"][0]) == 2
+    # The stored blob is the whole conversation; the log gets this turn only,
+    # and the save is conditional on the digest the turn started from.
+    (all_msgs, new_rows, digest), = calls["persisted"]
+    assert len(all_msgs) == len(PRIOR) + 2
+    assert len(new_rows) == 2
+    assert digest == "digest-1"
 
 
 def test_an_existing_session_of_the_caller_is_not_recreated(route, monkeypatch):
@@ -154,7 +168,7 @@ def test_another_users_session_is_a_404_that_does_not_reveal_it(route, monkeypat
     )
     response = post(client)
     assert response.status_code == 404 and response.json()["detail"] == "Session not found"
-    assert calls["saved"] == [] and calls["appended"] == []
+    assert calls["persisted"] == [] and calls["built"] == []
 
 
 def test_no_identity_is_401(route):
@@ -187,3 +201,74 @@ def test_a_provider_that_needs_a_key_but_has_none_is_400(route, monkeypatch):
     monkeypatch.setattr(agui, "resolve_model_config", lambda *a: {**CONFIG, "api_key": None})
     response = post(client)
     assert response.status_code == 400 and calls["created"] == []
+
+
+def test_the_connections_wire_protocol_and_headers_reach_the_agent(route, monkeypatch):
+    # #23: a custom connection speaks `api_style` and needs its `extra_headers`.
+    agui, client, calls = route
+    no_session(agui, monkeypatch)
+    assert post(client).status_code == 200
+    built = calls["built"][0]
+    assert built["api_style"] == "anthropic_compatible"
+    assert built["extra_headers"] == {"X-Org": "acme"}
+
+
+def test_a_second_turn_on_a_running_session_is_409_and_touches_nothing(route, monkeypatch):
+    agui, client, calls = route
+    no_session(agui, monkeypatch)
+    agui._active_turns.add(THREAD)
+
+    response = post(client)
+
+    assert response.status_code == 409
+    assert calls["built"] == [] and calls["persisted"] == []
+    assert THREAD in agui._active_turns, "the running turn keeps its claim"
+
+
+def test_the_turn_guard_is_released_after_a_run_and_after_a_failing_run(route, monkeypatch):
+    agui, client, calls = route
+    no_session(agui, monkeypatch)
+
+    assert post(client).status_code == 200
+    assert THREAD not in agui._active_turns
+
+    async def boom(messages, info):
+        raise RuntimeError("provider is down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        agui, "_build_agent", lambda **kw: Agent(FunctionModel(stream_function=boom))
+    )
+    failed = post(client)
+    assert failed.status_code == 200 and "RUN_ERROR" in failed.text
+    assert THREAD not in agui._active_turns
+    assert len(calls["persisted"]) == 1, "the failed turn was not saved"
+
+
+def test_a_setup_failure_releases_the_turn_guard(route, monkeypatch):
+    agui, client, _calls = route
+    no_session(agui, monkeypatch)
+
+    def broken(**kwargs):
+        raise RuntimeError("cannot build")
+
+    monkeypatch.setattr(agui, "_build_agent", broken)
+    with pytest.raises(RuntimeError):
+        post(client)
+    assert THREAD not in agui._active_turns
+
+
+def test_a_conflicting_save_is_reported_to_the_client_not_raised(route, monkeypatch):
+    # #24: another tab/worker saved the session while this turn was running.
+    agui, client, _calls = route
+    no_session(agui, monkeypatch)
+
+    def conflict(*args):
+        raise agui.SessionConflict(THREAD)
+
+    monkeypatch.setattr(agui, "persist_turn", conflict)
+
+    response = post(client)
+
+    assert response.status_code == 200
+    assert "session_conflict" in response.text and "RUN_FINISHED" in response.text
