@@ -64,9 +64,16 @@ def route(monkeypatch):
 
     monkeypatch.setattr(retrieval_pkg.retrieval, "setup_indexes", lambda: None)
 
-    before = set(sys.modules)
-    for name in ("api.chat", "api.agui", "api.sessions", "api.users", "api.providers", "api.keys"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    # Import api.agui fresh against the stub, and put everything back after:
+    # importing also rebinds `api.<name>` on the package, and a later
+    # `import api.chat as chat` in another test reads that attribute, so
+    # restoring sys.modules alone would leave it pointing at our copy.
+    import api as api_pkg
+
+    names = ("api.chat", "api.agui", "api.sessions", "api.users", "api.providers", "api.keys")
+    originals = {name: sys.modules.get(name) for name in names}
+    for name in names:
+        sys.modules.pop(name, None)
     agui = importlib.import_module("api.agui")
 
     calls = {"created": [], "saved": [], "appended": []}
@@ -88,9 +95,15 @@ def route(monkeypatch):
     app.include_router(agui.router)
     yield agui, TestClient(app), calls
 
-    for name in set(sys.modules) - before:
-        if name.startswith("api."):
+    for name, original in originals.items():
+        attr = name.split(".", 1)[1]
+        if original is None:
             sys.modules.pop(name, None)
+            if hasattr(api_pkg, attr):
+                delattr(api_pkg, attr)
+        else:
+            sys.modules[name] = original
+            setattr(api_pkg, attr, original)
 
 
 def no_session(agui, monkeypatch):
