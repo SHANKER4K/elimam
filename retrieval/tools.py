@@ -46,11 +46,11 @@ _DISPLAY_FIELDS = {
     "quran": ("surah", "surah_number", "ayah_number"),
     "hadith": ("book", "grade"),
     "tafsir": ("tafsir_book", "surah_number", "ayah_number"),
-    "books": ("book_name", "category_name", "all_authors", "author_death"),
+    "books": ("book_name", "category_name", "authors", "author_death"),
     "sunnah": (
         "book_name",
         "category_name",
-        "all_authors",
+        "authors",
         "author_death",
         "athar_number",
     ),
@@ -87,7 +87,7 @@ async def search(
     (surah/ayah, book/grade, book_name/category_name). Call `get_chunk` with an
     `ids` value when you need the full text. `filters` keys by collection —
     quran: surah_number, surah; hadith: book, grade; tafsir: surah_number,
-    surah, ayah_number; books: book_id, book_name, category_name, all_authors,
+    surah, ayah_number; books: book_id, book_name, category_name, authors,
     author_death, book_date; sunnah: books' keys plus athar_number. Text fields
     take a str or list[str]; numeric fields take an int, list[int], or a range
     {eq,lt,gt,lte,gte}.
@@ -140,14 +140,19 @@ def get_tafsir(req: TafsirId):
     return retrieval.by_id("tafsir", f"{req.book}:{req.ids}")
 
 
-def get_book(category: int, book_id: int, chunk_index: int):
-    "Get a specific chunk"
-    return retrieval.by_id("books", f"{category}:{book_id}:{chunk_index}")
+def get_book(book_id: int, chunk_index: int):
+    """Get one chunk of a book in the `books` collection.
+
+    `book_id` and `chunk_index` are the `book_id` / `chunk_index` fields of a
+    search hit (also the 2nd and 3rd parts of its `ids`, "category:book:chunk").
+    Neighbouring chunks are chunk_index - 1 / + 1.
+    """
+    return retrieval.by_book("books", book_id, chunk_index)
 
 
-def get_sunnah(category: int, book_id: int, chunk_index: int):
-    "Get a specific athar"
-    return retrieval.by_id("sunnah", f"{category}:{book_id}:{chunk_index}")
+def get_sunnah(book_id: int, chunk_index: int):
+    """Get one chunk of a book in the `sunnah` collection (same ids as get_book)."""
+    return retrieval.by_book("sunnah", book_id, chunk_index)
 
 
 def get_books_books() -> list:

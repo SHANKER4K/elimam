@@ -178,20 +178,21 @@ def test_every_get_tool_wires_the_right_lookup(monkeypatch):
     fake = SimpleNamespace(
         by_id=lambda collection, key: seen.append((collection, key)) or {"collection": collection},
         by_hadith=lambda book, number: seen.append(("hadith", f"{book}:{float(number)}")) or {"collection": "hadith"},
+        by_book=lambda collection, book_id, chunk: seen.append((collection, f"{book_id}:{chunk}")) or {"collection": collection},
     )
     monkeypatch.setattr(tools, "retrieval", fake)
 
     tools.get_quran(QuranId(ids="1:1"))
     tools.get_tafsir(TafsirId(book="saadi", ids="1:1"))
-    tools.get_book(1, 2, 3)
-    tools.get_sunnah(4, 5, 6)
+    tools.get_book(2, 3)
+    tools.get_sunnah(5, 6)
     tools.get_hadith(HadithId(book="bukhari", hadith_number=1))
 
     assert seen == [
         ("quran", "1:1"),
         ("tafsir", "saadi:1:1"),
-        ("books", "1:2:3"),
-        ("sunnah", "4:5:6"),
+        ("books", "2:3"),
+        ("sunnah", "5:6"),
         ("hadith", "bukhari:1.0"),
     ]
 
@@ -233,6 +234,18 @@ def test_compact_keeps_collection_specific_labels():
     )
     assert book["book_name"] == "الزهد"
     assert "surah" not in book  # not a books field
+
+
+def test_compact_keeps_the_authors_label_the_payload_really_has():
+    # The books/sunnah payload field is `authors` (#25); a label list that still
+    # said `all_authors` would drop the author from every compact hit.
+    for collection in ("books", "sunnah"):
+        row = tools._compact(
+            collection,
+            {"payload": {"ids": "1:2:3", "text": "نص", "authors": "حرب الكرماني", "all_authors": "x"}},
+        )
+        assert row["authors"] == "حرب الكرماني"
+        assert "all_authors" not in row
 
 
 def test_get_chunk_delegates_to_by_id(monkeypatch):

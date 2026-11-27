@@ -1,6 +1,7 @@
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -78,7 +79,11 @@ class BooksFilters(BaseModel):
     book_id: IntFilter | None = None
     book_name: StrFilter | None = None
     category_name: StrFilter | None = None
-    all_authors: StrFilter | None = None
+    # The payload field is `authors`; `all_authors` (the old, never-populated
+    # name) is still accepted so a model that learned it doesn't fail validation.
+    authors: StrFilter | None = Field(
+        default=None, validation_alias=AliasChoices("authors", "all_authors")
+    )
     author_death: IntFilter | None = None
     book_date: IntFilter | None = None
 
@@ -88,7 +93,11 @@ class SunnahFilters(BaseModel):
     book_id: IntFilter | None = None
     book_name: StrFilter | None = None
     category_name: StrFilter | None = None
-    all_authors: StrFilter | None = None
+    # The payload field is `authors`; `all_authors` (the old, never-populated
+    # name) is still accepted so a model that learned it doesn't fail validation.
+    authors: StrFilter | None = Field(
+        default=None, validation_alias=AliasChoices("authors", "all_authors")
+    )
     author_death: IntFilter | None = None
     book_date: IntFilter | None = None
     athar_number: IntFilter | None = None

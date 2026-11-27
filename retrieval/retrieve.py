@@ -13,7 +13,7 @@ import asyncio
 import logging
 import os
 from functools import cached_property
-from typing import Literal
+from typing import Literal, get_args
 
 import httpx
 from dotenv import load_dotenv
@@ -28,6 +28,7 @@ load_dotenv()
 
 CollectionName = Literal["quran", "hadith", "tafsir", "books", "sunnah"]
 RetrievalMode = Literal["hybrid", "dense", "sparse"]
+COLLECTIONS: tuple[str, ...] = get_args(CollectionName)
 
 # Jev (TypeSafe System One) reranker. English instructions, Arabic state: that is
 # TypeSafe's guidance for non-English content, and their own reranking recipe is
@@ -493,6 +494,29 @@ class Retrieval:
             return self.not_found(collection, key)
         return points[0].payload
 
+    def by_book(self, collection: str, book_id: int, chunk_index: int):
+        """Fetch one chunk of a books/sunnah book by book id + chunk number.
+
+        No category needed: the agent sees book ids in search hits but has no
+        reliable way to know a book's category number.
+        """
+        points, _ = self.client.scroll(
+            collection_name=collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(key="book_id", match=models.MatchValue(value=book_id)),
+                    models.FieldCondition(
+                        key="chunk_index", match=models.MatchValue(value=chunk_index)
+                    ),
+                ]
+            ),
+            limit=1,
+            with_vectors=False,
+        )
+        if not points:
+            return self.not_found(collection, f"{book_id}:{chunk_index}")
+        return points[0].payload
+
     @staticmethod
     def not_found(collection: str, key: str) -> dict:
         """What a lookup miss looks like to the LLM: always a dict, like a hit."""
@@ -533,8 +557,14 @@ class Retrieval:
     # Index setup
     # -----------------------------
 
-    def setup_indexes(self) -> None:
-        """Create payload indexes used by the getters and filter fields."""
+    def setup_indexes(self, collections: dict[str, str] | None = None) -> None:
+        """Create payload indexes used by the getters and filter fields.
+
+        `collections` maps logical names ("books") to physical ones and limits
+        the work to those (tests use throwaway collections); default: all five.
+        Afterwards, warns about any filter index that covers no points -- the
+        signature of a payload field the agent is offered but the data lacks.
+        """
         filter_types = {
             "int": models.PayloadSchemaType.INTEGER,
             "str": models.PayloadSchemaType.KEYWORD,
@@ -550,13 +580,19 @@ class Retrieval:
                 ("ids", models.PayloadSchemaType.KEYWORD),
                 ("tafsir_book", models.PayloadSchemaType.KEYWORD),
             },
+            # category_id/book_id/chunk_index are split out of `ids` by
+            # vectordb/backfill_book_ids.py; get_book looks chunks up by them.
             "books": {
                 ("ids", models.PayloadSchemaType.KEYWORD),
                 ("book_id", models.PayloadSchemaType.INTEGER),
+                ("category_id", models.PayloadSchemaType.INTEGER),
+                ("chunk_index", models.PayloadSchemaType.INTEGER),
             },
             "sunnah": {
                 ("ids", models.PayloadSchemaType.KEYWORD),
                 ("book_id", models.PayloadSchemaType.INTEGER),
+                ("category_id", models.PayloadSchemaType.INTEGER),
+                ("chunk_index", models.PayloadSchemaType.INTEGER),
             },
         }
 
@@ -568,7 +604,7 @@ class Retrieval:
                 "book_id": "int",
                 "book_name": "str",
                 "category_name": "str",
-                "all_authors": "str",
+                "authors": "str",
                 "author_death": "int",
                 "book_date": "int",
             },
@@ -576,7 +612,7 @@ class Retrieval:
                 "book_id": "int",
                 "book_name": "str",
                 "category_name": "str",
-                "all_authors": "str",
+                "authors": "str",
                 "author_death": "int",
                 "book_date": "int",
                 "athar_number": "int",
@@ -588,13 +624,37 @@ class Retrieval:
                 (key, filter_types[kind]) for key, kind in schema.items()
             )
 
-        for collection, index_set in fields.items():
-            for field, schema in index_set:
+        targets = collections or {name: name for name in fields}
+        for logical, physical in targets.items():
+            for field, schema in fields[logical]:
                 self.client.create_payload_index(
-                    collection,
+                    physical,
                     field_name=field,
                     field_schema=schema,
                 )
+
+        for logical, field in self.empty_filter_indexes(targets):
+            logger.warning(
+                "payload_index_covers_no_points",
+                extra={"collection": logical, "field": field},
+            )
+
+    def empty_filter_indexes(
+        self, collections: dict[str, str] | None = None
+    ) -> list[tuple[str, str]]:
+        """(collection, field) for every payload index that covers 0 points in
+        a non-empty collection: a filter on that field can never match.
+        That is how `book_id`/`all_authors` silently returned nothing (#25)."""
+        targets = collections or {name: name for name in COLLECTIONS}
+        empty = []
+        for logical, physical in targets.items():
+            info = self.client.get_collection(physical)
+            if not info.points_count:
+                continue
+            for field, index in sorted((info.payload_schema or {}).items()):
+                if not index.points:
+                    empty.append((logical, field))
+        return empty
 
 
 # ponytail: one process-wide instance. The clients and the BM25 model are global
