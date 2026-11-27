@@ -111,6 +111,16 @@ live in gitignored `qdrant_storage/`:
 # open notebooks/update_db.ipynb (see notebooks/ for per-corpus builders)
 ```
 
+After (re)populating `books` / `sunnah`, run the payload backfill once. It
+copies `book_id` / `category_id` / `chunk_index` out of `ids`, and
+`get_book` / `get_sunnah` plus the `book_id` filter read those fields — without
+it they silently return nothing (#25, #53):
+
+```bash
+python -m vectordb.backfill_book_ids --dry-run   # count, no writes
+python -m vectordb.backfill_book_ids             # idempotent, payloads only
+```
+
 ## API reference
 
 Base: `http://localhost:8000`. Interactive docs: `/docs`, `/openapi.json`.
