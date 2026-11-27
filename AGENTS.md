@@ -39,6 +39,7 @@ Two root manifests disagree: `pyproject.toml` (uv, `uv.lock`, requires-python >=
 
 - `skills/turath-index-skill.md` is the LLM system prompt and documents collections, filters, and known gaps (e.g. no Sahih Muslim; `get_book` numbering is unverifiable). The chat agent's tools are wired in `api/chat.py`.
 - `POST /chat` returns SSE; conversation history is persisted as pydantic-ai messages in `sessions.pydantic_message` (jsonb).
+- `POST /chat/agui` is the same agent over AG-UI (`api/agui.py` = route, `api/agui_events.py` = event stream, importable without Postgres/Qdrant so `tests/test_agui_events.py` runs anywhere). Server owns history: the client sends only its new message, and the route logs the user turn plus `result.new_messages()` (not `all_messages()`, which would duplicate the whole thread).
 
 ## Legacy — don't extend
 

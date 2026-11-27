@@ -127,6 +127,7 @@ identity in the body.** Public paths: `/chat`, `/chat/health`, `/providers`,
 | --- | --- |
 | `POST /chat` | bot chat, body `{message}` only; SSE stream; resolves user/active session/model/key server-side |
 | `POST /chat/web` | web chat `{message, model_name, model_provider, model_variant, session_id, user_provider_id?}`; SSE; persists pydantic-ai messages to `sessions.pydantic_message` |
+| `POST /chat/agui` | same agent over the [AG-UI](https://docs.ag-ui.com) protocol (`RunAgentInput` body, SSE out). `threadId` = session UUID; `forwardedProps` = `{model_provider, model_name, model_variant, user_provider_id?}`; the client sends only its new message, history stays in `sessions.pydantic_message`. Tool events carry a `metadata` bag; extra CUSTOM events `citation` and `tool_call_ready` (`api/agui_events.py`) |
 | `GET /chat/health` | liveness (used by compose healthcheck) |
 | `POST /search/dense_search`, `/sparse_search`, `/hybrid_search` | `{collection, query_text (Arabic), top_k ≤ 100, filters?, rerank_pool ≤ 500}` |
 | `GET /providers` | public catalog `{slug: {url, models}}` (DB-backed, cached in-process) |
