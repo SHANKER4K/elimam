@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import aclosing
 import logging
 import os
 import time
@@ -24,7 +25,7 @@ from pydantic_ai import (
     PartDeltaEvent,
     PartEndEvent,
 )
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
 from pydantic_ai.settings import ThinkingEffort, ThinkingLevel
 from pydantic_ai.messages import (
     ModelResponse,
@@ -124,7 +125,8 @@ class ChatResponse(BaseModel):
 
 
 def sse(event: str, data):
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    # default=str: a tool result holding a datetime/set/... must not kill the stream.
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
 system_prompt = ""
@@ -299,17 +301,29 @@ def _build_agent(
     )
 
 
-def load_session(session_id: str) -> list:
+class SessionConflict(Exception):
+    """The session's history changed while this turn was running."""
+
+
+def load_session_state(session_id: str) -> tuple[list, str | None]:
+    """(history, digest). The digest identifies the stored history so the save
+    at the end of the turn can tell whether someone else wrote in between."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT pydantic_message FROM sessions WHERE id = %s",
+                "SELECT pydantic_message, md5(pydantic_message::text) "
+                "FROM sessions WHERE id = %s",
                 (session_id,),
             )
             row = cur.fetchone()
-        if row is None or row[0] is None:
-            return []
-        return ModelMessagesTypeAdapter.validate_python(row[0])
+    if row is None:
+        return [], None
+    history = ModelMessagesTypeAdapter.validate_python(row[0]) if row[0] else []
+    return history, row[1]
+
+
+def load_session(session_id: str) -> list:
+    return load_session_state(session_id)[0]
 
 
 def save_session_messages(session_id: str, msgs) -> None:
@@ -321,6 +335,33 @@ def save_session_messages(session_id: str, msgs) -> None:
                 (payload, session_id),
             )
         conn.commit()
+
+
+def persist_turn(session_id: str, all_msgs, new_msgs, expected_digest: str | None) -> None:
+    """Save the history and append this turn's chat-log rows, atomically, and
+    only if the stored history is still the one the turn started from.
+
+    Raises SessionConflict (and writes nothing) if another turn -- another
+    worker, the bot, a second tab -- saved this session in the meantime.
+    Compare-and-swap rather than a lock: a lock would pin a pooled connection
+    for the whole (minutes-long) model run.
+    """
+    payload = ModelMessagesTypeAdapter.dump_json(all_msgs).decode()
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE sessions SET pydantic_message = %s, updated_at = now() "
+                    "WHERE id = %s AND md5(pydantic_message::text) IS NOT DISTINCT FROM %s",
+                    (payload, session_id, expected_digest),
+                )
+                if cur.rowcount == 0:
+                    raise SessionConflict(session_id)
+                _insert_chat_rows(cur, session_id, new_msgs)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
 
 
 def _project_message(m) -> tuple[str, str] | None:
@@ -354,26 +395,27 @@ def _project_message(m) -> tuple[str, str] | None:
     return role, text
 
 
+def _insert_chat_rows(cur, session_id: str, msgs) -> None:
+    # Each INSERT's subquery sees the rows inserted before it in this
+    # transaction, so +1 is the next free sequence every time.
+    for role, content in filter(None, map(_project_message, msgs)):
+        cur.execute(
+            """
+            INSERT INTO messages (session_id, role, content, sequence)
+            VALUES (
+                %s, %s, %s,
+                (SELECT COALESCE(MAX(sequence), 0) + 1
+                 FROM messages WHERE session_id = %s)
+            )
+            """,
+            (session_id, role, content, session_id),
+        )
+
+
 def append_session_messages(session_id: str, msgs) -> None:
-    rows = [row for row in map(_project_message, msgs) if row is not None]
-    if not rows:
-        return
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Each INSERT's subquery sees the rows inserted before it in this
-            # transaction, so +1 is the next free sequence every time.
-            for role, content in rows:
-                cur.execute(
-                    """
-                    INSERT INTO messages (session_id, role, content, sequence)
-                    VALUES (
-                        %s, %s, %s,
-                        (SELECT COALESCE(MAX(sequence), 0) + 1
-                         FROM messages WHERE session_id = %s)
-                    )
-                    """,
-                    (session_id, role, content, session_id),
-                )
+            _insert_chat_rows(cur, session_id, msgs)
         conn.commit()
 
 
@@ -426,7 +468,96 @@ def resolve_telegram_caller(
     return identity.user_id
 
 
+# Sessions with a turn in flight in this process. Async generators run on the
+# event loop, so a plain set is race-free here; persist_turn's compare-and-swap
+# covers other processes.
+_active_turns: set[str] = set()
+
+GENERIC_ERROR = "حدث خطأ أثناء التوليد"
+
+
+def _error_payload(exc: BaseException) -> dict[str, Any]:
+    """What the client may see about a failed run. Errors from the user's own
+    model provider are passed on; anything else is logged, not shown."""
+    if isinstance(exc, SessionConflict):
+        return {
+            "code": "session_conflict",
+            "message": "تم تحديث هذه المحادثة من مكان آخر؛ لم يُحفظ هذا الرد.",
+        }
+    if isinstance(exc, ModelHTTPError):
+        body = exc.body
+        message = body.get("message") if isinstance(body, dict) else None
+        return {
+            "code": "model_http_error",
+            "status": exc.status_code,
+            "message": message or str(exc),
+        }
+    if isinstance(exc, AgentRunError):
+        return {"code": type(exc).__name__, "message": str(exc)}
+    return {"code": "internal_error", "message": GENERIC_ERROR}
+
+
 async def stream(
+    prompt: str,
+    session_id: str,
+    provider_slug: str,
+    provider_url: str,
+    api_key: str | None,
+    model_name: str,
+    variant: str,
+    api_style: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+):
+    """SSE for one turn. Always ends with `done`, preceded by `error` if the
+    turn failed -- once the response has started, raising would only drop the
+    connection and leave the client guessing."""
+    if session_id in _active_turns:
+        yield sse(
+            "error",
+            {"code": "session_busy", "message": "هناك رد قيد التوليد في هذه المحادثة."},
+        )
+        yield sse("done", {"output": None})
+        return
+
+    _active_turns.add(session_id)
+    outcome: dict[str, Any] = {"output": None}
+    try:
+        # aclosing: when the client disconnects, Starlette aclose()s this
+        # generator; the inner run must be closed right here (persisting the
+        # partial turn) rather than whenever the GC finalises it.
+        turn = _run_turn(
+            outcome,
+            prompt,
+            session_id=session_id,
+            provider_slug=provider_slug,
+            provider_url=provider_url,
+            api_key=api_key,
+            model_name=model_name,
+            variant=variant,
+            api_style=api_style,
+            extra_headers=extra_headers,
+        )
+        async with aclosing(turn):
+            async for chunk in turn:
+                yield chunk
+    except asyncio.CancelledError:
+        logger.info("agent_run_cancelled", extra={"session_id": session_id})
+        raise
+    except Exception as exc:
+        if isinstance(exc, SessionConflict):
+            logger.warning("session_conflict", extra={"session_id": session_id})
+        else:
+            logger.exception("agent_run_failed", extra={"session_id": session_id})
+        yield sse("error", _error_payload(exc))
+        outcome["output"] = None
+    finally:
+        _active_turns.discard(session_id)
+
+    yield sse("done", {"output": outcome["output"]})
+
+
+async def _run_turn(
+    outcome: dict,
     prompt: str,
     session_id: str,
     provider_slug: str,
@@ -448,167 +579,161 @@ async def stream(
         extra_headers=extra_headers,
     )
 
-    history = await asyncio.to_thread(load_session, session_id)
-    last_output: Any = None
+    history, digest = await asyncio.to_thread(load_session_state, session_id)
     citations = CitationStream()
 
-    try:
-        async with agent.iter(prompt, message_history=history) as agent_run:
-            try:
-                async for node in agent_run:
-                    match node:
-                        case ModelRequestNode(request=req):
-                            for part in req.parts:
-                                if isinstance(part, ToolReturnPart):
-                                    started = _TOOL_STARTS.pop(part.tool_call_id, None)
-                                    duration_ms = (
-                                        round((time.monotonic() - started) * 1000)
-                                        if started is not None
-                                        else None
-                                    )
-                                    yield sse(
-                                        "tool_result",
-                                        {
-                                            "tool_name": part.tool_name,
-                                            "tool_call_id": part.tool_call_id,
-                                            "content": part.content,
-                                            **describe_result(
-                                                part.tool_name,
-                                                part.content,
-                                                duration_ms,
-                                            ),
-                                        },
-                                    )
-                            async with node.stream(agent_run.ctx) as events:
-                                async for event in events:
-                                    if isinstance(event, PartStartEvent):
-                                        if isinstance(event.part, TextPart):
-                                            text, cards = citations.feed(
-                                                event.part.content
-                                            )
+    async with agent.iter(prompt, message_history=history) as agent_run:
+        # Whatever the run produced is persisted, even if it stopped early: the
+        # full history for the next turn, and only this turn's messages for the
+        # chat log (all_messages() includes the history passed in).
+        try:
+            async for node in agent_run:
+                match node:
+                    case ModelRequestNode(request=req):
+                        for part in req.parts:
+                            if isinstance(part, ToolReturnPart):
+                                started = _TOOL_STARTS.pop(part.tool_call_id, None)
+                                duration_ms = (
+                                    round((time.monotonic() - started) * 1000)
+                                    if started is not None
+                                    else None
+                                )
+                                yield sse(
+                                    "tool_result",
+                                    {
+                                        "tool_name": part.tool_name,
+                                        "tool_call_id": part.tool_call_id,
+                                        "content": part.content,
+                                        **describe_result(
+                                            part.tool_name,
+                                            part.content,
+                                            duration_ms,
+                                        ),
+                                    },
+                                )
+                        async with node.stream(agent_run.ctx) as events:
+                            async for event in events:
+                                if isinstance(event, PartStartEvent):
+                                    if isinstance(event.part, TextPart):
+                                        text, cards = citations.feed(
+                                            event.part.content
+                                        )
+                                        yield sse(
+                                            "message_start",
+                                            {
+                                                "index": event.index,
+                                                "text": text,
+                                            },
+                                        )
+                                        for card in cards:
+                                            yield sse("citation", card)
+                                    elif isinstance(event.part, ThinkingPart):
+                                        yield sse(
+                                            "thinking_start",
+                                            {
+                                                "index": event.index,
+                                                "id": event.part.id,
+                                                "provider_name": event.part.provider_name,
+                                            },
+                                        )
+                                elif isinstance(event, PartDeltaEvent):
+                                    if isinstance(event.delta, TextPartDelta):
+                                        text, cards = citations.feed(
+                                            event.delta.content_delta or ""
+                                        )
+                                        if text:
                                             yield sse(
-                                                "message_start",
+                                                "text_delta",
                                                 {
                                                     "index": event.index,
                                                     "text": text,
                                                 },
                                             )
-                                            for card in cards:
-                                                yield sse("citation", card)
-                                        elif isinstance(event.part, ThinkingPart):
+                                        for card in cards:
+                                            yield sse("citation", card)
+                                    elif isinstance(event.delta, ThinkingPartDelta):
+                                        yield sse(
+                                            "thinking_delta",
+                                            {
+                                                "index": event.index,
+                                                "text": event.delta.content_delta,
+                                                "provider_name": event.delta.provider_name,
+                                            },
+                                        )
+                                elif isinstance(event, PartEndEvent):
+                                    # index + kind let a client close the block
+                                    # it opened, whether text or thinking.
+                                    if isinstance(event.part, ThinkingPart):
+                                        yield sse(
+                                            "thinking_end", {"index": event.index}
+                                        )
+                                    else:
+                                        # Anything an unterminated tag was
+                                        # holding back is model output: emit it.
+                                        tail = citations.flush()
+                                        if tail:
                                             yield sse(
-                                                "thinking_start",
-                                                {
-                                                    "index": event.index,
-                                                    "id": event.part.id,
-                                                    "provider_name": event.part.provider_name,
-                                                },
+                                                "text_delta",
+                                                {"index": event.index, "text": tail},
                                             )
-                                    elif isinstance(event, PartDeltaEvent):
-                                        if isinstance(event.delta, TextPartDelta):
-                                            text, cards = citations.feed(
-                                                event.delta.content_delta or ""
-                                            )
-                                            if text:
-                                                yield sse(
-                                                    "text_delta",
-                                                    {
-                                                        "index": event.index,
-                                                        "text": text,
-                                                    },
-                                                )
-                                            for card in cards:
-                                                yield sse("citation", card)
-                                        elif isinstance(event.delta, ThinkingPartDelta):
-                                            yield sse(
-                                                "thinking_delta",
-                                                {
-                                                    "index": event.index,
-                                                    "text": event.delta.content_delta,
-                                                    "provider_name": event.delta.provider_name,
-                                                },
-                                            )
-                                    elif isinstance(event, PartEndEvent):
-                                        # index + kind let a client close the block
-                                        # it opened, whether text or thinking.
-                                        if isinstance(event.part, ThinkingPart):
-                                            yield sse(
-                                                "thinking_end", {"index": event.index}
-                                            )
-                                        else:
-                                            # Anything an unterminated tag was
-                                            # holding back is model output: emit it.
-                                            tail = citations.flush()
-                                            if tail:
-                                                yield sse(
-                                                    "text_delta",
-                                                    {"index": event.index, "text": tail},
-                                                )
-                                            yield sse(
-                                                "message_end", {"index": event.index}
-                                            )
+                                        yield sse(
+                                            "message_end", {"index": event.index}
+                                        )
 
-                        case CallToolsNode(model_response=resp):
-                            for part in resp.parts:
-                                if isinstance(part, ToolCallPart):
-                                    args = part.args_as_dict()
-                                    yield sse(
-                                        "tool",
-                                        {
-                                            "text": part.tool_name,
-                                            "tool_name": part.tool_name,
-                                            "tool_call_id": part.tool_call_id,
-                                            "args": args,
-                                            "status": "running",
-                                            **describe_call(part.tool_name, args),
-                                        },
-                                    )
-                                elif isinstance(part, ThinkingPart):
-                                    yield sse(
-                                        "thinking",
-                                        {
-                                            "text": part.content,
-                                            "id": part.id,
-                                            "provider_name": part.provider_name,
-                                        },
-                                    )
+                    case CallToolsNode(model_response=resp):
+                        for part in resp.parts:
+                            if isinstance(part, ToolCallPart):
+                                args = part.args_as_dict()
+                                yield sse(
+                                    "tool",
+                                    {
+                                        "text": part.tool_name,
+                                        "tool_name": part.tool_name,
+                                        "tool_call_id": part.tool_call_id,
+                                        "args": args,
+                                        "status": "running",
+                                        **describe_call(part.tool_name, args),
+                                    },
+                                )
+                            elif isinstance(part, ThinkingPart):
+                                yield sse(
+                                    "thinking",
+                                    {
+                                        "text": part.content,
+                                        "id": part.id,
+                                        "provider_name": part.provider_name,
+                                    },
+                                )
 
-                        case End(data=result):
-                            last_output = result.output
+                    case End(data=result):
+                        outcome["output"] = result.output
 
-            except StopAsyncIteration:
-                # الـ stream انتهى بشكل طبيعي - لا ترفع الخطأ
-                logger.debug("Stream completed normally")
-                pass
-            finally:
-                # Persist whatever the run produced, even if it stopped early:
-                # the full history for the next turn, and only this turn's
-                # messages for the chat log (all_messages() includes the
-                # history we passed in, so appending it duplicated every turn).
-                try:
-                    await asyncio.to_thread(
-                        save_session_messages, session_id, agent_run.all_messages()
-                    )
-                    await asyncio.to_thread(
-                        append_session_messages, session_id, agent_run.new_messages()
-                    )
-                except Exception:
-                    logger.exception("session_save_failed", extra={"session_id": session_id})
-
-    except ModelHTTPError as e:
-        message = e.body.get("message") if isinstance(e.body, dict) else str(e)
-        yield sse("text_delta", {"text": message})
-        raise
-    except asyncio.CancelledError:
-        logger.info("agent_run_cancelled", extra={"session_id": session_id})
-        raise
-
-    # The stream carried canonical tags; `output` must agree with it, or a client
-    # that renders on `done` would show the model's raw markup.
-    if last_output and "<" in last_output:
-        last_output = await asyncio.to_thread(render_citations, last_output)
-
-    yield sse("done", {"output": last_output})
+        except BaseException:
+            try:
+                await asyncio.to_thread(
+                    persist_turn,
+                    session_id,
+                    agent_run.all_messages(),
+                    agent_run.new_messages(),
+                    digest,
+                )
+            except Exception:
+                # Never let a failed save hide why the run failed.
+                logger.exception("session_save_failed", extra={"session_id": session_id})
+            raise
+        else:
+            # The stream carried canonical tags; `output` must agree with it, or
+            # a client that renders on `done` would show the model's raw markup.
+            output = outcome["output"]
+            if isinstance(output, str) and "<" in output:
+                outcome["output"] = await asyncio.to_thread(render_citations, output)
+            await asyncio.to_thread(
+                persist_turn,
+                session_id,
+                agent_run.all_messages(),
+                agent_run.new_messages(),
+                digest,
+            )
 
 
 # Start times keyed by tool_call_id, so tool_result can report a duration.
