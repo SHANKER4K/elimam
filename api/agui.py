@@ -20,16 +20,18 @@ import logging
 import uuid
 from typing import Any
 
+from ag_ui.core import CustomEvent
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelRequest
 
 from api.agui_events import ElimamAGUIAdapter
 from api.chat import (
+    SessionConflict,
+    _active_turns,
     _build_agent,
-    append_session_messages,
-    load_session,
-    save_session_messages,
+    load_session_state,
+    persist_turn,
 )
 from api.providers import resolve_model_config
 from api.sessions import SessionCreate, create_web_session, get_session
@@ -107,25 +109,41 @@ async def chat_agui(request: Request):
             ),
         )
 
-    agent = _build_agent(
-        provider_slug=model_provider,
-        model_name=model_config["model"],
-        provider_url=model_config["url"],
-        api_key=model_config["api_key"],
-        variant=model_config["variant"],
-        session_id=session_id,
-    )
-    history = await asyncio.to_thread(load_session, session_id)
-
-    try:
-        adapter = await ElimamAGUIAdapter.from_request(
-            request,
-            agent=agent,
-            manage_system_prompt="server",
-            manage_message_history="server",
+    # One turn per session at a time, as on /chat/web. Check and add happen with
+    # no await between them, so a second request sees the first. Answered with
+    # a plain 409 because the response has not started yet.
+    if session_id in _active_turns:
+        raise HTTPException(
+            status_code=409, detail="هناك رد قيد التوليد في هذه المحادثة."
         )
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail="Invalid AG-UI run input") from exc
+    _active_turns.add(session_id)
+    try:
+        agent = _build_agent(
+            provider_slug=model_provider,
+            model_name=model_config["model"],
+            provider_url=model_config["url"],
+            api_key=model_config["api_key"],
+            variant=model_config["variant"],
+            session_id=session_id,
+            api_style=model_config["api_style"],
+            extra_headers=model_config["extra_headers"],
+        )
+        history, digest = await asyncio.to_thread(load_session_state, session_id)
+
+        try:
+            adapter = await ElimamAGUIAdapter.from_request(
+                request,
+                agent=agent,
+                manage_system_prompt="server",
+                manage_message_history="server",
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail="Invalid AG-UI run input"
+            ) from exc
+    except BaseException:
+        _active_turns.discard(session_id)
+        raise
 
     # With server-held history the client's new message is part of the run's
     # *input*, so result.new_messages() holds only what the agent produced. The
@@ -138,19 +156,37 @@ async def chat_agui(request: Request):
     # simply absent from the history instead of half-recorded; the old /chat/web
     # saved partial turns in a `finally`. Upgrade path: save RunCancelled
     # .all_messages() from on_cancel once compaction can be told apart from new.
-    async def on_complete(result) -> None:
+    async def on_complete(result):
         try:
+            # Atomic, and only if the stored history is still the one this turn
+            # started from (compare-and-swap on `digest`, see persist_turn).
             await asyncio.to_thread(
-                save_session_messages, session_id, result.all_messages()
-            )
-            await asyncio.to_thread(
-                append_session_messages,
+                persist_turn,
                 session_id,
+                result.all_messages(),
                 [*user_turn, *result.new_messages()],
+                digest,
+            )
+        except SessionConflict:
+            logger.warning("session_conflict", extra={"session_id": session_id})
+            yield CustomEvent(
+                name="session_conflict",
+                value={"message": "تم تحديث هذه المحادثة من مكان آخر؛ لم يُحفظ هذا الرد."},
             )
         except Exception:
             logger.exception("agui_save_failed", extra={"session_id": session_id})
 
-    return adapter.streaming_response(
-        adapter.run_stream(message_history=history, on_complete=on_complete)
-    )
+    async def guarded():
+        # ponytail: released when the stream is iterated to its end or closed. A
+        # response whose client vanishes before the first byte never starts
+        # this generator, so its `finally` cannot run; /chat/web's stream() has
+        # the same edge. Upgrade path: a TTL on the entry.
+        try:
+            async for event in adapter.run_stream(
+                message_history=history, on_complete=on_complete
+            ):
+                yield event
+        finally:
+            _active_turns.discard(session_id)
+
+    return adapter.streaming_response(guarded())
