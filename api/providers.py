@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Header
 
 from api.keys import decrypt
+from provider_url import UnsafeProviderUrl, sanitize_extra_headers
 from db.connection import get_conn
 
 router = APIRouter(prefix="/providers", tags=["Providers"])
@@ -92,7 +93,8 @@ def _load_connection(
             if user_provider_id is not None:
                 cur.execute(
                     "SELECT up.id, up.user_id, up.base_url, up.api_style, "
-                    "       up.encrypted_key, pm.variants, p.requires_key "
+                    "       up.encrypted_key, pm.variants, p.requires_key, "
+                    "       up.extra_headers "
                     "FROM user_providers up "
                     "LEFT JOIN providers p ON p.id = up.provider_id "
                     "LEFT JOIN provider_models pm "
@@ -105,7 +107,8 @@ def _load_connection(
                 # catalog provider can be identified without one.
                 cur.execute(
                     "SELECT up.id, up.user_id, up.base_url, up.api_style, "
-                    "       up.encrypted_key, pm.variants, p.requires_key "
+                    "       up.encrypted_key, pm.variants, p.requires_key, "
+                    "       up.extra_headers "
                     "FROM user_providers up "
                     "LEFT JOIN providers p ON p.id = up.provider_id "
                     "LEFT JOIN provider_models pm "
@@ -138,6 +141,7 @@ def resolve_model_config(
 
     row = _load_connection(user_provider_id, provider_slug, model, user_id)
     variants: list[str] | None = None
+    extra_headers: dict[str, str] = {}
 
     if row is None:
         if provider is None:
@@ -156,11 +160,17 @@ def resolve_model_config(
             encrypted_key,
             variants,
             requires_key,
+            stored_headers,
         ) = row
         if str(connection_user_id) != str(user_id):
             # Unreachable: the WHERE clause above already filters by user_id.
             raise ValueError(f"Unknown model provider: {provider_slug}")
         api_key = decrypt(encrypted_key) if encrypted_key else None
+        try:
+            # Re-checked here, not only on write: rows can predate the rules.
+            extra_headers = sanitize_extra_headers(stored_headers or {})
+        except UnsafeProviderUrl as exc:
+            raise ValueError(f"Unsafe extra headers on connection for {provider_slug}") from exc
         if requires_key is None:
             # Custom connection: there is no catalog row to ask. A keyless
             # custom endpoint (local Ollama and friends) is legitimate, so a
@@ -187,6 +197,7 @@ def resolve_model_config(
             str(resolved_user_provider_id) if resolved_user_provider_id else None
         ),
         "api_style": api_style,
+        "extra_headers": extra_headers,
         "api_key": api_key,
         "requires_key": bool(requires_key),
     }

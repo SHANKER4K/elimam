@@ -86,7 +86,7 @@ class FakeLLM:
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("content-length", 0)))
                 recorder.requests.append(
-                    {"path": self.path, "headers": dict(self.headers), "body": json.loads(body or b"{}")}
+                    {"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": json.loads(body or b"{}")}
                 )
                 parsed = recorder.requests[-1]["body"]
                 anthropic = self.path.endswith("/messages")
