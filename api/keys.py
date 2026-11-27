@@ -16,6 +16,7 @@ Design notes (per the refactor spec):
 import psycopg2
 import os
 from pydantic import BaseModel
+from api.db_errors import db_error
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException, Request
 from cryptography.fernet import Fernet
@@ -163,7 +164,7 @@ def add_or_update_key(req: ApiKeyIn, request: Request):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise db_error(e, 400) from e
 
     return _row_to_key_meta((row[0], row[1], req.provider, row[2], row[3]))
 
@@ -201,6 +202,6 @@ def update_key(req: ApiKeyIn, request: Request):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise db_error(e, 400) from e
 
     return _row_to_key_meta((row[0], row[1], req.provider, row[2], row[3]))

@@ -1,5 +1,6 @@
 import psycopg2
 from pydantic import BaseModel
+from api.db_errors import db_error
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException, Request
 
@@ -79,7 +80,7 @@ def add_message(req: Message, request: Request):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise db_error(e, 400) from e
     return {
         "id": str(row[0]),
         "session_id": str(row[1]),

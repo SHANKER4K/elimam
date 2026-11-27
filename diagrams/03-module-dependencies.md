@@ -22,7 +22,7 @@ flowchart TD
   botmain["telegram_bot/app/main.py"]
   botbackend["telegram_bot/app/backend.py"]
   bothandlers["telegram_bot/app/handlers/*"]
-  legacy["cli/, web.py, get_books.py"]
+  legacy["cli/, get_books.py"]
 
   server --> chat
   server --> sessions

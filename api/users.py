@@ -1,5 +1,6 @@
 import psycopg2
 from pydantic import BaseModel
+from api.db_errors import db_error
 from db.connection import get_conn
 from fastapi import APIRouter, HTTPException, Request
 
@@ -85,7 +86,7 @@ async def link_telegram(req: User, request: Request):
                 conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise db_error(e, 400) from e
     return _row_to_user(row)
 
 
@@ -109,7 +110,7 @@ def add_user(req: User, request: Request):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise db_error(e, 400) from e
     return _row_to_user(row)
 
 
@@ -146,5 +147,5 @@ def get_or_create_user_by_telegram_id(
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            raise db_error(e, 400) from e
     return _row_to_user(row)

@@ -2,7 +2,7 @@
 
 Boots the real server module with env vars set, then asserts the pipeline did
 what the issue demands. Needs the DB/Qdrant env from .env to import server.
-Run from the repo root: .venv/bin/python temp/test_logfire_config.py
+Run from the repo root: .venv/bin/python scripts/check_logfire_config.py
 """
 
 import os

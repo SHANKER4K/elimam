@@ -20,7 +20,6 @@ from pydantic_ai import (
     ToolCallPart,
     ToolReturnPart,
     ThinkingPart,
-    ModelRequestNode,
     PartStartEvent,
     PartDeltaEvent,
     PartEndEvent,
@@ -118,10 +117,6 @@ class WebChatRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-
-
-class ChatResponse(BaseModel):
-    response: str
 
 
 def sse(event: str, data):
@@ -832,7 +827,11 @@ async def chat_web_stream(req: WebChatRequest, request: Request):
 
     try:
         session = await asyncio.to_thread(get_session, req.session_id)
-    except HTTPException:
+    except HTTPException as exc:
+        # Only "not found" means "start a new session". A DB outage must not
+        # fall through to create_web_session and collide on the primary key.
+        if exc.status_code != 404:
+            raise
         session = None
 
     if session is not None and str(session["user_id"]) != user_id:

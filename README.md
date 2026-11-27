@@ -194,6 +194,9 @@ pytest tests/  # rest need docker compose up + populated Qdrant + models
 - `tests/test_retrieval.py`, `test_citations.py`, `test_books_fuzzy.py`,
   `test_tool_presenter.py`, `test_seed_text.py` — retrieval, citation refill,
   fuzzy titles, tool presentation and index/query parity; all need no Qdrant
+- `tests/test_chat_*.py` — drive the real `stream()` against Postgres with
+  pydantic-ai test models and a local fake LLM server (no Qdrant, no keys)
+- `scripts/check_logfire_config.py` — runnable check for the Logfire wiring
 - `tests/test_dahl_*.py` — ad-hoc debug scripts, not pytest tests
 
 ## Project structure
@@ -216,5 +219,5 @@ notebooks/             ingestion (update_db.ipynb + per-corpus builders)
 nginx/nginx.conf       reverse proxy; certbot/ for TLS
 Dockerfile             py3.12 multi-stage (torch CPU + requirements.txt)
 docker-compose.yaml    backend + embedding/reranker TEI + telegram + nginx + omniroute
-tests/  temp/  diagrams/  vectordb/  docs/
+tests/  scripts/  diagrams/  vectordb/  docs/
 ```
