@@ -34,6 +34,7 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
     ModelMessagesTypeAdapter,
 )
+from openai import AsyncOpenAI
 from pydantic_ai.capabilities.hooks import Hooks
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -214,6 +215,28 @@ def _anthropic_base_url(url: str) -> str:
     return url[: -len("/v1")] if url.endswith("/v1") else url
 
 
+def _openai_provider(
+    base_url: str | None, api_key: str | None, headers: dict[str, str]
+) -> OpenAIProvider:
+    """An OpenAI-compatible provider whose client sends `headers` on every request.
+
+    `extra_headers` in `ModelSettings` only reach the run's own requests:
+    SummarizingCompaction writes its summary with a nested Agent built from
+    `ctx.model` and its own settings, so the OpenCode session id has to ride on
+    the client -- otherwise the summary request comes back "Request is missing
+    x-opencode-session".
+    """
+    if not headers:
+        return OpenAIProvider(base_url=base_url, api_key=api_key)
+    return OpenAIProvider(
+        openai_client=AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key or os.environ.get("OPENAI_API_KEY") or "api-key-not-set",
+            default_headers=headers,
+        )
+    )
+
+
 def _build_agent(
     provider_slug: str,
     model_name: str,
@@ -254,16 +277,14 @@ def _build_agent(
     elif provider_slug == "free":
         # The "free" provider is a special case: it doesn't require an API key,
         # and the user must select a model from the available options.
-        provider = OpenAIProvider(
-            base_url=os.environ.get("FREE_PROVIDER_URL"),
-            api_key=os.environ.get("FREE_PROVIDER_API_KEY"),
+        free_url = os.environ.get("FREE_PROVIDER_URL")
+        provider = _openai_provider(
+            free_url,
+            os.environ.get("FREE_PROVIDER_API_KEY"),
+            opencode_session_headers(free_url, session_id),
         )
         model = OpenAIChatModel(model_name, provider=provider)
-        model_settings = _build_settings(
-            variant,
-            temperature=0.5,
-            **_headers(opencode_session_headers(os.environ.get("FREE_PROVIDER_URL"), session_id)),
-        )
+        model_settings = _build_settings(variant, temperature=0.5)
     else:
         # Custom connections and catalog providers without a dedicated
         # adapter: the connection's api_style says which wire protocol it speaks.
@@ -275,10 +296,14 @@ def _build_agent(
                 ),
             )
         else:
-            provider = OpenAIProvider(base_url=provider_url, api_key=api_key)
+            provider = _openai_provider(
+                provider_url, api_key, opencode_session_headers(provider_url, session_id)
+            )
             model = OpenAIChatModel(model_name, provider=provider)
 
-        # OpenCode Zen/Go refuse to route a request with no session id.
+        # OpenCode Zen/Go refuse to route a request with no session id. An
+        # OpenAI connection gets it from the client built above; an
+        # anthropic-compatible one only from here.
         model_settings = _build_settings(
             variant,
             temperature=0.5,
